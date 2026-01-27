@@ -1,6 +1,6 @@
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, Calendar, FileText, CheckCircle, Save, X, Edit, Trash2, Download, ArrowLeft } from 'lucide-react';
+import { Plus, Search, Calendar, FileText, CheckCircle, Save, X, Edit, Trash2, Download, ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import api from '../lib/axios';
 import { useAuth } from '../contexts/AuthContext';
@@ -231,6 +231,8 @@ const ManageStocks = () => {
     }, [showSaleModal, showReceiptModal]);
 
 
+    const [prevFeedConsumedAmount, setPrevFeedConsumedAmount] = useState(0);
+
     // Fetch Data
     useEffect(() => {
         fetchInitialData();
@@ -239,11 +241,17 @@ const ManageStocks = () => {
     const fetchInitialData = async () => {
         setLoading(true);
         try {
-            const [stocksRes, vendorsRes, customersRes, ledgersRes] = await Promise.all([
+            const targetDate = dateParam || new Date().toISOString().split('T')[0];
+            const prevDateObj = new Date(targetDate);
+            prevDateObj.setDate(prevDateObj.getDate() - 1);
+            const prevDateStr = prevDateObj.toISOString().split('T')[0];
+
+            const [stocksRes, vendorsRes, customersRes, ledgersRes, prevStocksRes] = await Promise.all([
                 api.get('/inventory-stock', { params: dateParam ? { startDate: dateParam, endDate: dateParam } : {} }),
                 api.get('/vendor?limit=1000'),
                 api.get('/customer'),
-                api.get('/ledger')
+                api.get('/ledger'),
+                api.get('/inventory-stock', { params: { startDate: prevDateStr, endDate: prevDateStr } })
             ]);
 
             if (stocksRes.data.success) {
@@ -268,6 +276,16 @@ const ManageStocks = () => {
                     }
                 }
             }
+
+            if (prevStocksRes.data.success) {
+                const prevStocks = prevStocksRes.data.data;
+                const prevFeedConsume = prevStocks.filter(s => s.inventoryType === 'feed' && s.type === 'consume');
+                const prevTotal = prevFeedConsume.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+                setPrevFeedConsumedAmount(prevTotal);
+            } else {
+                setPrevFeedConsumedAmount(0);
+            }
+
             if (vendorsRes.data.success) setVendors(vendorsRes.data.data || []);
             if (customersRes.data.success) setCustomers(customersRes.data.data || []); // customer api structure might vary
             if (ledgersRes.data.success) setLedgers(ledgersRes.data.data || []);
@@ -293,7 +311,7 @@ const ManageStocks = () => {
             // Reset Form Data
             setPurchaseData({
                 vendorId: '',
-                vehicleNumber: '',
+                vehicleNumber: '', // Text input as per requirement
                 birds: '',
                 weight: '',
                 avgWeight: 0,
@@ -318,6 +336,7 @@ const ManageStocks = () => {
         e.preventDefault();
         try {
             if (isEditMode && currentStockId) {
+                console.log("saleData updated", saleData)
                 await api.put(`/inventory-stock/${currentStockId}`, saleData);
                 alert("Sale updated successfully!");
             } else {
@@ -492,6 +511,50 @@ const ManageStocks = () => {
         }
     };
 
+    const [showNaturalWeightLossModal, setShowNaturalWeightLossModal] = useState(false);
+    const [naturalWeightLossData, setNaturalWeightLossData] = useState({
+        birds: '', // Not used, but keeping structure
+        weight: '',
+        rate: 0,
+        amount: 0,
+        date: defaultDate,
+        type: 'natural_weight_loss' // Explicit type for controller
+    });
+
+    // Auto-calculate Natural Weight Loss Amount
+    useEffect(() => {
+        const weight = Number(naturalWeightLossData.weight) || 0;
+        const rate = Number(naturalWeightLossData.rate) || 0;
+
+        setNaturalWeightLossData(prev => ({
+            ...prev,
+            amount: Number((weight * rate).toFixed(2))
+        }));
+    }, [naturalWeightLossData.weight, naturalWeightLossData.rate]);
+
+    const handleNaturalWeightLossSubmit = async (e) => {
+        e.preventDefault();
+        try {
+            if (isEditMode && currentStockId) {
+                await api.put(`/inventory-stock/${currentStockId}`, { ...naturalWeightLossData, type: 'natural_weight_loss' });
+                alert("Natural Weight Loss updated successfully!");
+            } else {
+                // Determine which endpoint to use. standard weight-loss endpoint can be reused if we pass type?
+                // The controller for 'weight-loss' endpoint forces type 'weight_loss' usually unless modified.
+                // We modified the controller to accept type from body if present.
+                await api.post('/inventory-stock/weight-loss', { ...naturalWeightLossData, type: 'natural_weight_loss' });
+                alert("Natural Weight Loss added successfully!");
+            }
+            setShowNaturalWeightLossModal(false);
+            fetchInitialData();
+            setNaturalWeightLossData({ birds: '', weight: '', rate: 0, amount: 0, date: defaultDate, type: 'natural_weight_loss' });
+            setIsEditMode(false);
+            setCurrentStockId(null);
+        } catch (error) {
+            alert(error.response?.data?.message || "Failed to save natural weight loss");
+        }
+    };
+
     const handleFeedPurchaseSubmit = async (e) => {
         e.preventDefault();
         try {
@@ -570,6 +633,7 @@ const ManageStocks = () => {
         (vendor.contactNumber || '').includes(vendorSearchTerm) ||
         (vendor.place || '').toLowerCase().includes(vendorSearchTerm.toLowerCase())
     );
+    console.log("filteredVendors", filteredVendors);
 
     const handleVendorInputFocus = () => {
         setShowVendorDropdown(true);
@@ -583,6 +647,7 @@ const ManageStocks = () => {
     };
 
     const handleVendorSelect = (vendor) => {
+        console.log("vendor", vendor);
         setSelectedVendor(vendor);
         setVendorSearchTerm('');
         setPurchaseData(prev => ({ ...prev, vendorId: vendor._id || vendor.id }));
@@ -686,6 +751,7 @@ const ManageStocks = () => {
     const saleStocks = stocks.filter(s => s.type === 'sale' || s.type === 'receipt');
     const mortalityStock = stocks.find(s => s.type === 'mortality');
     const weightLossStock = stocks.find(s => s.type === 'weight_loss');
+    const naturalWeightLossStock = stocks.find(s => s.type === 'natural_weight_loss');
 
     // Sort Purchase Stocks: Opening Stock First, then by Date Descending
     const sortedPurchaseStocks = [...rawPurchaseStocks].sort((a, b) => {
@@ -751,211 +817,214 @@ const ManageStocks = () => {
     };
 
     return (
-        <div className="p-6">
-            <div className="flex justify-between items-center mb-6">
-                <div className="flex items-center gap-4">
+        <div className="px-2">
+            {/* Sticky Header Section */}
+            <div className="sticky top-18 z-20 bg-gray-50 -mx-6 px-6 pt-4 pb-2 mb-6 border-b border-gray-200 shadow-sm">
+                <div className="flex justify-between items-center mb-4">
+                    <div className="flex items-center gap-4">
+                        {dateParam && (
+                            <button
+                                onClick={() => {
+                                    const dateObj = new Date(dateParam);
+                                    const y = dateObj.getFullYear();
+                                    const m = dateObj.getMonth() + 1;
+                                    const basePath = user?.role === 'supervisor' ? '/supervisor/stocks/daily' : '/stocks/daily';
+                                    navigate(`${basePath}?year=${y}&month=${m}`);
+                                }}
+                                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                                <ArrowLeft size={20} />
+                            </button>
+                        )}
+                        <div>
+                            <h1 className="text-2xl font-bold">{dateParam ? `Report - ${new Date(dateParam).toLocaleDateString()}` : 'Manage Stocks'}</h1>
+                            {dateParam && <p className="text-gray-500">Daily Stock Report</p>}
+                        </div>
+                    </div>
                     {dateParam && (
                         <button
-                            onClick={() => {
-                                const dateObj = new Date(dateParam);
-                                const y = dateObj.getFullYear();
-                                const m = dateObj.getMonth() + 1;
-                                const basePath = user?.role === 'supervisor' ? '/supervisor/stocks/daily' : '/stocks/daily';
-                                navigate(`${basePath}?year=${y}&month=${m}`);
-                            }}
-                            className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                            onClick={handleExportToExcel}
+                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
                         >
-                            <ArrowLeft size={20} />
+                            <Download size={20} />
+                            Download
                         </button>
                     )}
-                    <div>
-                        <h1 className="text-2xl font-bold">{dateParam ? `Report - ${new Date(dateParam).toLocaleDateString()}` : 'Manage Stocks'}</h1>
-                        {dateParam && <p className="text-gray-500">Daily Stock Report</p>}
-                    </div>
                 </div>
-                {dateParam && (
-                    <button
-                        onClick={handleExportToExcel}
-                        className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                    >
-                        <Download size={20} />
-                        Download
-                    </button>
-                )}
-            </div>
 
-            {/* Action Buttons - Only for Supervisor */}
-            {isSupervisor && (
-                <div className="flex gap-4 mb-8">
-                    <button onClick={() => {
-                        setIsEditMode(false);
-                        setCurrentStockId(null);
-                        setPurchaseData({
-                            vendorId: '',
-                            vehicleNumber: '',
-                            birds: '',
-                            weight: '',
-                            avgWeight: 0,
-                            rate: '',
-                            amount: 0,
-                            refNo: '',
-                            date: defaultDate
-                        });
-                        setSelectedVendor(null);
-                        setVendorSearchTerm('');
-                        setShowPurchaseModal(true);
-                    }} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Add Purchase</button>
-                    <button onClick={() => {
-                        setIsEditMode(false);
-                        setCurrentStockId(null);
-                        setSaleData({
-                            customerId: '',
-                            billNumber: '',
-                            birds: '',
-                            weight: '',
-                            avgWeight: 0,
-                            rate: '',
-                            amount: 0,
-                            totalBalance: 0,
-                            cashPaid: 0,
-                            onlinePaid: 0,
-                            discount: 0,
-                            balance: 0,
-                            cashLedgerId: '',
-                            onlineLedgerId: '',
-                            saleOutBalance: 0,
-                            saleOutBalance: 0,
-                            date: defaultDate
-                        });
-                        setShowSaleModal(true);
-                    }} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Add Sale</button>
-                    <button onClick={() => {
-                        setIsEditMode(false);
-                        setCurrentStockId(null);
-                        setSaleData({
-                            customerId: '',
-                            billNumber: '',
-                            birds: 0,
-                            weight: 0,
-                            avgWeight: 0,
-                            rate: 0,
-                            amount: 0,
-                            totalBalance: 0,
-                            cashPaid: 0,
-                            onlinePaid: 0,
-                            discount: 0,
-                            balance: 0,
-                            cashLedgerId: '',
-                            onlineLedgerId: '',
-                            saleOutBalance: 0,
-                            saleOutBalance: 0,
-                            date: defaultDate
-                        });
-                        setShowReceiptModal(true);
-                    }} className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700">Add Receipt</button>
-                    <button
-                        onClick={() => {
-                            if (mortalityStock) {
-                                // Edit Mode
-                                setIsEditMode(true);
-                                setCurrentStockId(mortalityStock._id);
-                                setMortalityData({
-                                    birds: mortalityStock.birds,
-                                    weight: mortalityStock.weight,
-                                    avgWeight: mortalityStock.avgWeight,
-                                    rate: mortalityStock.rate,
-                                    amount: mortalityStock.amount,
-                                    date: mortalityStock.date ? new Date(mortalityStock.date).toISOString().split('T')[0] : ''
-                                });
-                                setShowMortalityModal(true);
-                            } else {
-                                // Add Mode
-                                setIsEditMode(false);
-                                setCurrentStockId(null);
-                                setMortalityData({
-                                    birds: '',
-                                    weight: '',
-                                    avgWeight: 0,
-                                    rate: totalRate.toFixed(2),
-                                    amount: 0,
-                                    amount: 0,
-                                    date: defaultDate
-                                });
-                                setShowMortalityModal(true);
-                            }
-                        }}
-                        className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-                    >
-                        {mortalityStock ? 'Edit Birds Mortality' : 'Add Birds Mortality'}
-                    </button>
-                    <button
-                        onClick={() => {
-                            if (weightLossStock) {
-                                // Edit Mode
-                                setIsEditMode(true);
-                                setCurrentStockId(weightLossStock._id);
-                                setWeightLossData({
-                                    birds: 0,
-                                    weight: weightLossStock.weight,
-                                    avgWeight: 0,
-                                    rate: weightLossStock.rate,
-                                    amount: weightLossStock.amount,
-                                    date: weightLossStock.date ? new Date(weightLossStock.date).toISOString().split('T')[0] : ''
-                                });
-                                setShowWeightLossModal(true);
-                            } else {
-                                // Add Mode
-                                setIsEditMode(false);
-                                setCurrentStockId(null);
-                                setWeightLossData({
-                                    birds: 0,
-                                    weight: '',
-                                    avgWeight: 0,
-                                    rate: totalRate.toFixed(2), // Use Total Purchase Rate
-                                    amount: 0,
-                                    amount: 0,
-                                    date: defaultDate
-                                });
-                                setShowWeightLossModal(true);
-                            }
-                        }}
-                        className="px-4 py-2 bg-teal-600 text-white rounded hover:bg-teal-700"
-                    >
-                        {weightLossStock ? 'Edit Weight Loss/Gain' : 'Add Weight Loss / Weight ON'}
-                    </button>
-                    <button
-                        onClick={() => {
-                            setFeedPurchaseData({
+                {/* Action Buttons - Only for Supervisor and Current Date */}
+                {isSupervisor && (!dateParam || dateParam === new Date().toLocaleDateString('en-CA')) && (
+                    <div className="flex gap-4 mb-4 overflow-x-auto pb-2 scrollbar-hide">
+                        <button onClick={() => {
+                            setIsEditMode(false);
+                            setCurrentStockId(null);
+                            setPurchaseData({
                                 vendorId: '',
+                                vehicleNumber: '',
+                                birds: '',
                                 weight: '',
+                                avgWeight: 0,
                                 rate: '',
                                 amount: 0,
-                                date: new Date().toISOString().split('T')[0]
-                            });
-                            setShowFeedPurchaseModal(true);
-                        }}
-                        disabled={dateParam && feedPurchaseStocks.some(s => new Date(s.date).toISOString().split('T')[0] === dateParam)}
-                        className={`px-4 py-2 text-white rounded ${dateParam && feedPurchaseStocks.some(s => new Date(s.date).toISOString().split('T')[0] === dateParam) ? 'bg-gray-400 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-700'}`}
-                    >
-                        Add Feed Purchase
-                    </button>
-                    <button
-                        onClick={() => {
-                            setFeedConsumeData({
-                                weight: '',
-                                rate: '',
-                                amount: 0,
+                                refNo: '',
                                 date: defaultDate
                             });
-                            setShowFeedConsumeModal(true);
-                        }}
-                        disabled={dateParam && feedConsumeStocks.some(s => new Date(s.date).toISOString().split('T')[0] === dateParam)}
-                        className={`px-4 py-2 text-white rounded ${dateParam && feedConsumeStocks.some(s => new Date(s.date).toISOString().split('T')[0] === dateParam) ? 'bg-gray-400 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700'}`}
-                    >
-                        Add Feed Consume
-                    </button>
-                </div>
-            )}
+                            setSelectedVendor(null);
+                            setVendorSearchTerm('');
+                            setShowPurchaseModal(true);
+                        }} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 whitespace-nowrap">Add Purchase</button>
+                        <button onClick={() => {
+                            setIsEditMode(false);
+                            setCurrentStockId(null);
+                            setSaleData({
+                                customerId: '',
+                                billNumber: '',
+                                birds: '',
+                                weight: '',
+                                avgWeight: 0,
+                                rate: '',
+                                amount: 0,
+                                totalBalance: 0,
+                                cashPaid: 0,
+                                onlinePaid: 0,
+                                discount: 0,
+                                balance: 0,
+                                cashLedgerId: '',
+                                onlineLedgerId: '',
+                                saleOutBalance: 0,
+                                saleOutBalance: 0,
+                                date: defaultDate
+                            });
+                            setShowSaleModal(true);
+                        }} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 whitespace-nowrap">Add Sale</button>
+                        <button onClick={() => {
+                            setIsEditMode(false);
+                            setCurrentStockId(null);
+                            setSaleData({
+                                customerId: '',
+                                billNumber: '',
+                                birds: 0,
+                                weight: 0,
+                                avgWeight: 0,
+                                rate: 0,
+                                amount: 0,
+                                totalBalance: 0,
+                                cashPaid: 0,
+                                onlinePaid: 0,
+                                discount: 0,
+                                balance: 0,
+                                cashLedgerId: '',
+                                onlineLedgerId: '',
+                                saleOutBalance: 0,
+                                saleOutBalance: 0,
+                                date: defaultDate
+                            });
+                            setShowReceiptModal(true);
+                        }} className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 whitespace-nowrap">Add Receipt</button>
+                        <button
+                            onClick={() => {
+                                if (mortalityStock) {
+                                    // Edit Mode
+                                    setIsEditMode(true);
+                                    setCurrentStockId(mortalityStock._id);
+                                    setMortalityData({
+                                        birds: mortalityStock.birds,
+                                        weight: mortalityStock.weight,
+                                        avgWeight: mortalityStock.avgWeight,
+                                        rate: mortalityStock.rate,
+                                        amount: mortalityStock.amount,
+                                        date: mortalityStock.date ? new Date(mortalityStock.date).toISOString().split('T')[0] : ''
+                                    });
+                                    setShowMortalityModal(true);
+                                } else {
+                                    // Add Mode
+                                    setIsEditMode(false);
+                                    setCurrentStockId(null);
+                                    setMortalityData({
+                                        birds: '',
+                                        weight: '',
+                                        avgWeight: 0,
+                                        rate: totalRate.toFixed(2),
+                                        amount: 0,
+                                        amount: 0,
+                                        date: defaultDate
+                                    });
+                                    setShowMortalityModal(true);
+                                }
+                            }}
+                            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 whitespace-nowrap"
+                        >
+                            {mortalityStock ? 'Edit Birds Mortality' : 'Add Birds Mortality'}
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (weightLossStock) {
+                                    // Edit Mode
+                                    setIsEditMode(true);
+                                    setCurrentStockId(weightLossStock._id);
+                                    setWeightLossData({
+                                        birds: 0,
+                                        weight: weightLossStock.weight,
+                                        avgWeight: 0,
+                                        rate: weightLossStock.rate,
+                                        amount: weightLossStock.amount,
+                                        date: weightLossStock.date ? new Date(weightLossStock.date).toISOString().split('T')[0] : ''
+                                    });
+                                    setShowWeightLossModal(true);
+                                } else {
+                                    // Add Mode
+                                    setIsEditMode(false);
+                                    setCurrentStockId(null);
+                                    setWeightLossData({
+                                        birds: 0,
+                                        weight: '',
+                                        avgWeight: 0,
+                                        rate: totalRate.toFixed(2), // Use Total Purchase Rate
+                                        amount: 0,
+                                        amount: 0,
+                                        date: defaultDate
+                                    });
+                                    setShowWeightLossModal(true);
+                                }
+                            }}
+                            className="px-4 py-2 bg-teal-600 text-white rounded hover:bg-teal-700 whitespace-nowrap"
+                        >
+                            {weightLossStock ? 'Edit Weight Loss/Gain' : 'Add Weight Loss / Weight ON'}
+                        </button>
+                        <button
+                            onClick={() => {
+                                setFeedPurchaseData({
+                                    vendorId: '',
+                                    weight: '',
+                                    rate: '',
+                                    amount: 0,
+                                    date: new Date().toISOString().split('T')[0]
+                                });
+                                setShowFeedPurchaseModal(true);
+                            }}
+                            disabled={dateParam && feedPurchaseStocks.some(s => new Date(s.date).toISOString().split('T')[0] === dateParam)}
+                            className={`px-4 py-2 text-white rounded whitespace-nowrap ${dateParam && feedPurchaseStocks.some(s => new Date(s.date).toISOString().split('T')[0] === dateParam) ? 'bg-gray-400 cursor-not-allowed' : 'bg-gray-600 hover:bg-gray-700'}`}
+                        >
+                            Add Feed Purchase
+                        </button>
+                        <button
+                            onClick={() => {
+                                setFeedConsumeData({
+                                    weight: '',
+                                    rate: '',
+                                    amount: 0,
+                                    date: defaultDate
+                                });
+                                setShowFeedConsumeModal(true);
+                            }}
+                            disabled={dateParam && feedConsumeStocks.some(s => new Date(s.date).toISOString().split('T')[0] === dateParam)}
+                            className={`px-4 py-2 text-white rounded whitespace-nowrap ${dateParam && feedConsumeStocks.some(s => new Date(s.date).toISOString().split('T')[0] === dateParam) ? 'bg-gray-400 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700'}`}
+                        >
+                            Add Feed Consume
+                        </button>
+                    </div>
+                )}
+            </div>
 
             {/* Feed Purchase Modal */}
             {showFeedPurchaseModal && (
@@ -1157,7 +1226,7 @@ const ManageStocks = () => {
                                                             date: stock.date ? new Date(stock.date).toISOString().split('T')[0] : ''
                                                         });
                                                         // Pre-select vendor for display
-                                                        const v = vendors.find(v => v._id === (stock.vendorId?._id || stock.vendorId?.id));
+                                                        const v = vendors.find(v => v._id || v.id === (stock.vendorId?._id || stock.vendorId?.id));
                                                         if (v) {
                                                             setSelectedVendor(v);
                                                             setVendorSearchTerm('');
@@ -1241,25 +1310,73 @@ const ManageStocks = () => {
                                             onClick={() => {
                                                 setIsEditMode(true);
                                                 setCurrentStockId(sale._id);
+
+                                                // 1. Identify Customer & Current Balance
+                                                const custId = sale.customerId?._id || sale.customerId?.id || sale.customerId;
+                                                const cust = customers.find(c => c._id == custId || c.id == custId);
+
+                                                // Default to current balance if found, else use 0
+                                                let baseBalance = cust ? (cust.outstandingBalance || 0) : 0;
+
+                                                // 2. Calculate Effects of Subsequent Sales (including this one)
+                                                // Filter sales for this customer from the available stocks
+                                                const customerSales = stocks.filter(s =>
+                                                    (s.type === 'sale' || s.type === 'receipt') &&
+                                                    (s.customerId?._id == custId || s.customerId?.id == custId || s.customerId == custId)
+                                                );
+
+                                                // Sort by Date Descending, then ID Descending (for same day/time consistency)
+                                                customerSales.sort((a, b) => {
+                                                    const dateA = new Date(a.date);
+                                                    const dateB = new Date(b.date);
+                                                    if (dateA > dateB) return -1;
+                                                    if (dateA < dateB) return 1;
+                                                    // If dates are equal, fallback to ID sorting (assuming monotonic IDs)
+                                                    if (a._id > b._id) return -1;
+                                                    if (a._id < b._id) return 1;
+                                                    return 0;
+                                                });
+
+                                                // Subtract effects until we pass the current sale
+                                                let deduction = 0;
+                                                for (const s of customerSales) {
+                                                    // Effect = Amount - Paid - Discount
+                                                    // Note: Receipts have Amount 0, but Paid > 0, so Effect is negative (reduces balance)
+                                                    const effect = (Number(s.amount) || 0) - (Number(s.cashPaid) || 0) - (Number(s.onlinePaid) || 0) - (Number(s.discount) || 0);
+                                                    deduction += effect;
+
+                                                    if (s._id === sale._id) {
+                                                        break; // We include the current sale's effect in the deduction to reach the 'Opening Balance'
+                                                    }
+                                                }
+
+                                                // Calculate Retrospective Opening Balance
+                                                const retrospectiveBalance = baseBalance - deduction;
+
+                                                if (cust) {
+                                                    setSelectedCustomer(cust);
+                                                    setCustomerSearchTerm('');
+                                                } else if (sale.customerId && sale.customerId.shopName) {
+                                                    setSelectedCustomer(sale.customerId);
+                                                }
+
                                                 setSaleData({
-                                                    customerId: sale.customerId?._id || sale.customerId?.id || '',
+                                                    customerId: custId || '',
                                                     billNumber: sale.billNumber || '',
                                                     birds: sale.birds || 0,
                                                     weight: sale.weight || 0,
                                                     avgWeight: sale.avgWeight || 0,
                                                     rate: sale.rate || 0,
                                                     amount: sale.amount || 0,
-                                                    // We don't have totalBalance from backend stock usually, so we let effect calc it or set 0
                                                     totalBalance: 0,
                                                     cashPaid: sale.cashPaid || 0,
                                                     onlinePaid: sale.onlinePaid || 0,
                                                     discount: sale.discount || 0,
                                                     balance: sale.balance || 0,
-                                                    cashLedgerId: sale.cashLedgerId || '',
-                                                    onlineLedgerId: sale.onlineLedgerId || '',
-                                                    // saleOutBalance: customer balance logic? Might be tricky to get "balance at that time".
-                                                    // For now, let's fetch current customer balance or leave 0.
-                                                    saleOutBalance: sale.customerId?.outstandingBalance || 0,
+                                                    cashLedgerId: (sale.cashLedgerId?._id || sale.cashLedgerId?.id || sale.cashLedgerId) || (cashLedgers?.[0]?._id || cashLedgers?.[0]?.id || ''),
+                                                    onlineLedgerId: (sale.onlineLedgerId?._id || sale.onlineLedgerId?.id || sale.onlineLedgerId) || (bankLedgers?.[0]?._id || bankLedgers?.[0]?.id || ''),
+                                                    // Set the calculated retrospective balance
+                                                    saleOutBalance: retrospectiveBalance,
                                                     date: sale.date ? new Date(sale.date).toISOString().split('T')[0] : ''
                                                 });
 
@@ -1295,165 +1412,244 @@ const ManageStocks = () => {
                 </div>
             </div>
 
-            <div className="flex flex-col lg:flex-row gap-6 mt-6">
-                {/* Mortality and Weight Loss Details Table */}
-                <div className="flex-1 bg-white rounded-lg shadow-md p-6">
-                    <h2 className="text-xl font-bold mb-4 text-gray-800">Mortality and Weight Loss Details</h2>
-                    <div className="overflow-x-auto">
-                        <table className="w-full border-collapse border border-gray-300">
-                            <thead>
-                                <tr className="bg-gray-100 text-gray-800">
-                                    <th className="border p-2 text-left">Particulars</th>
-                                    <th className="border p-2 text-center">BIRDS</th>
-                                    <th className="border p-2 text-center">WEIGHT</th>
-                                    <th className="border p-2 text-center">AVG</th>
-                                    <th className="border p-2 text-center">RATE</th>
-                                    <th className="border p-2 text-center">TOTAL</th>
-                                    <th className="border p-2 text-center">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {/* BIRDS MORTALITY */}
-                                <tr className="text-center">
-                                    <td className="border p-2 font-medium text-left">BIRDS MORTALITY</td>
-                                    <td className="border p-2">{mortalityStock ? mortalityStock.birds : '-'}</td>
-                                    <td className="border p-2">{mortalityStock ? mortalityStock.weight?.toFixed(2) : '-'}</td>
-                                    <td className="border p-2">{mortalityStock ? ((mortalityStock.weight / mortalityStock.birds) || 0).toFixed(2) : '-'}</td>
-                                    <td className="border p-2">{mortalityStock ? mortalityStock.rate?.toFixed(2) : '-'}</td>
-                                    <td className="border p-2">{mortalityStock ? mortalityStock.amount?.toFixed(0) : '-'}</td>
-                                    <td className="border p-2">
-                                        {mortalityStock && (
-                                            <button
-                                                onClick={() => {
-                                                    setIsEditMode(true);
-                                                    setCurrentStockId(mortalityStock._id);
-                                                    setMortalityData({
-                                                        birds: mortalityStock.birds,
-                                                        weight: mortalityStock.weight,
-                                                        avgWeight: mortalityStock.avgWeight,
-                                                        rate: mortalityStock.rate,
-                                                        amount: mortalityStock.amount,
-                                                        date: mortalityStock.date ? new Date(mortalityStock.date).toISOString().split('T')[0] : ''
-                                                    });
-                                                    setShowMortalityModal(true);
-                                                }}
-                                                className="text-blue-600 hover:text-blue-800 font-medium"
-                                            >
-                                                Edit
-                                            </button>
-                                        )}
-                                    </td>
-                                </tr>
-                                {/* WEIGHT LOSS/ WEIGHT ON */}
-                                <tr className="text-center">
-                                    <td className="border p-2 font-medium text-left">WEIGHT LOSS/ WEIGHT ON</td>
-                                    <td className="border p-2">0</td>
-                                    <td className="border p-2">{weightLossStock ? weightLossStock.weight?.toFixed(2) : '-'}</td>
-                                    <td className="border p-2">0.00</td>
-                                    <td className="border p-2">{weightLossStock ? weightLossStock.rate?.toFixed(2) : '-'}</td>
-                                    <td className="border p-2">{weightLossStock ? weightLossStock.amount?.toFixed(0) : '-'}</td>
-                                    <td className="border p-2">
-                                        {weightLossStock && (
-                                            <button
-                                                onClick={() => {
-                                                    setIsEditMode(true);
-                                                    setCurrentStockId(weightLossStock._id);
-                                                    setWeightLossData({
-                                                        birds: 0,
-                                                        weight: weightLossStock.weight,
-                                                        avgWeight: 0,
-                                                        rate: weightLossStock.rate,
-                                                        amount: weightLossStock.amount,
-                                                        date: weightLossStock.date ? new Date(weightLossStock.date).toISOString().split('T')[0] : ''
-                                                    });
-                                                    setShowWeightLossModal(true);
-                                                }}
-                                                className="text-blue-600 hover:text-blue-800 font-medium"
-                                            >
-                                                Edit
-                                            </button>
-                                        )}
-                                    </td>
-                                </tr>
-                                {/* TOTAL W LOSS Row */}
-                                <tr className="bg-black text-white font-bold text-center">
-                                    <td className="border p-2 text-left">TOTAL W LOSS</td>
-                                    <td className="border p-2">
-                                        {(Number(mortalityStock?.birds) || 0) + (Number(weightLossStock?.birds) || 0)}
-                                    </td>
-                                    <td className="border p-2">
-                                        {((Number(mortalityStock?.weight) || 0) + (Number(weightLossStock?.weight) || 0)).toFixed(2)}
-                                    </td>
-                                    <td className="border p-2"></td>
-                                    <td className="border p-2">
-                                        {(() => {
-                                            const totalWeight = (Number(mortalityStock?.weight) || 0) + (Number(weightLossStock?.weight) || 0);
-                                            const totalAmount = (Number(mortalityStock?.amount) || 0) + (Number(weightLossStock?.amount) || 0);
-                                            return totalWeight && totalWeight !== 0 ? (totalAmount / totalWeight).toFixed(2) : '0.00';
-                                        })()}
-                                    </td>
-                                    <td className="border p-2">
-                                        {((Number(mortalityStock?.amount) || 0) + (Number(weightLossStock?.amount) || 0)).toFixed(0)}
-                                    </td>
-                                    <td className="border p-2"></td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+            {/* CALCULATIONS FOR CLOSING STOCK & PROFIT BREAKDOWN */}
+            {(() => {
+                // 1. GROSS CLOSING STOCK CALCS
+                const grossBirds = totalBirds - totalSaleBirds;
+                const grossWeight = totalWeight - totalSaleWeight;
+                const grossAvg = grossBirds !== 0 ? grossWeight / grossBirds : 0;
+                const grossRate = totalRate;
+                const grossTotal = grossRate * grossWeight;
 
-                {/* FEED STOCK SUMMARY TABLE */}
-                <div className="flex-1 bg-white rounded-lg shadow-md p-6">
-                    <h2 className="text-xl font-bold mb-4 text-orange-600">FEED STOCK SUMMARY</h2>
-                    <div className="overflow-x-auto">
-                        <table className="w-full border-collapse">
-                            <thead>
-                                <tr className="bg-gray-100 text-gray-700">
-                                    <th className="border p-2 text-center"></th>
-                                    <th className="border p-2 text-center">BAG</th>
-                                    <th className="border p-2 text-center">QTTY</th>
-                                    <th className="border p-2 text-center">RATE</th>
-                                    <th className="border p-2 text-center">AMOUNT</th>
-                                    {isSupervisor && <th className="border p-2 text-center">ACTION</th>}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {(() => {
-                                    // Calculate Totals
-                                    const opStocks = sortedFeedStocks.filter(s => s.type === 'opening');
-                                    const purchStocks = sortedFeedStocks.filter(s => s.type !== 'opening');
-                                    const consStocks = sortedFeedConsumeStocks;
+                // 2. BIRDS MORTALITY CALCS
+                const mortBirds = mortalityStock ? Number(mortalityStock.birds) : 0;
+                const mortAvg = totalSaleAvg;
+                const mortWeightComputed = mortBirds * mortAvg;
+                const mortRate = grossRate;
+                const mortTotalComputed = mortRate * mortWeightComputed;
 
-                                    const opStats = {
-                                        bags: opStocks.reduce((sum, s) => sum + (Number(s.bags) || 0), 0),
-                                        weight: opStocks.reduce((sum, s) => sum + (Number(s.weight) || 0), 0),
-                                        amount: opStocks.reduce((sum, s) => sum + (Number(s.amount) || 0), 0)
-                                    };
-                                    opStats.rate = opStats.weight > 0 ? opStats.amount / opStats.weight : 0;
+                // 3. ACTUAL WEIGHT LOSS / ON CALCS
+                const actBirds = 0;
+                const actWeight = weightLossStock ? Number(weightLossStock.weight) : 0;
+                const actRate = grossRate;
+                const actTotalComputed = actRate * actWeight;
 
-                                    const purchStats = {
-                                        bags: purchStocks.reduce((sum, s) => sum + (Number(s.bags) || 0), 0),
-                                        weight: purchStocks.reduce((sum, s) => sum + (Number(s.weight) || 0), 0),
-                                        amount: purchStocks.reduce((sum, s) => sum + (Number(s.amount) || 0), 0)
-                                    };
-                                    purchStats.rate = purchStats.weight > 0 ? purchStats.amount / purchStats.weight : 0;
+                // 4. CLOSING STOCK CALCS
+                const closeBirds = grossBirds - mortBirds;
+                const closeAvg = totalSaleAvg;
+                const closeWeight = closeBirds * closeAvg;
+                const closeRate = grossRate;
+                const closeTotal = closeRate * closeWeight;
 
-                                    const consStats = {
-                                        bags: consStocks.reduce((sum, s) => sum + (Number(s.bags) || 0), 0),
-                                        weight: consStocks.reduce((sum, s) => sum + (Number(s.weight) || 0), 0),
-                                        amount: consStocks.reduce((sum, s) => sum + (Number(s.amount) || 0), 0)
-                                    };
-                                    consStats.rate = consStats.weight > 0 ? consStats.amount / consStats.weight : 0;
+                // 5. NATURAL WEIGHT LOSS / ON CALCS
+                const natBirds = 0;
+                const natWeight = grossWeight - mortWeightComputed - actWeight - closeWeight;
+                const natRate = grossRate;
+                const natTotalComputed = natRate * natWeight;
 
-                                    const closingStats = {
-                                        bags: opStats.bags + purchStats.bags - consStats.bags,
-                                        weight: opStats.weight + purchStats.weight - consStats.weight,
-                                        amount: opStats.amount + purchStats.amount - consStats.amount
-                                    };
-                                    closingStats.rate = closingStats.weight > 0 ? closingStats.amount / closingStats.weight : 0;
+                // --- FEED STOCK SUMMARY CALCULATIONS ---
+                const opStocks = sortedFeedStocks.filter(s => s.type === 'opening');
+                const purchStocks = sortedFeedStocks.filter(s => s.type !== 'opening');
+                const consStocks = sortedFeedConsumeStocks;
 
-                                    return (
-                                        <>
+                const opStats = {
+                    bags: opStocks.reduce((sum, s) => sum + (Number(s.bags) || 0), 0),
+                    weight: opStocks.reduce((sum, s) => sum + (Number(s.weight) || 0), 0),
+                    amount: opStocks.reduce((sum, s) => sum + (Number(s.amount) || 0), 0)
+                };
+                opStats.rate = opStats.weight > 0 ? opStats.amount / opStats.weight : 0;
+
+                const purchStats = {
+                    bags: purchStocks.reduce((sum, s) => sum + (Number(s.bags) || 0), 0),
+                    weight: purchStocks.reduce((sum, s) => sum + (Number(s.weight) || 0), 0),
+                    amount: purchStocks.reduce((sum, s) => sum + (Number(s.amount) || 0), 0)
+                };
+                purchStats.rate = purchStats.weight > 0 ? purchStats.amount / purchStats.weight : 0;
+
+                const consStats = {
+                    bags: consStocks.reduce((sum, s) => sum + (Number(s.bags) || 0), 0),
+                    weight: consStocks.reduce((sum, s) => sum + (Number(s.weight) || 0), 0),
+                    amount: consStocks.reduce((sum, s) => sum + (Number(s.amount) || 0), 0)
+                };
+                consStats.rate = consStats.weight > 0 ? consStats.amount / consStats.weight : 0;
+
+                const closingStats = {
+                    bags: opStats.bags + purchStats.bags - consStats.bags,
+                    weight: opStats.weight + purchStats.weight - consStats.weight,
+                    amount: opStats.amount + purchStats.amount - consStats.amount
+                };
+                closingStats.rate = closingStats.weight > 0 ? closingStats.amount / closingStats.weight : 0;
+
+
+                // --- PROFIT BREAKDOWN CALCULATIONS ---
+                // PROFIT MARGINE PER KG = total sale rate - total purchase rate
+                const profitMarginPerKg = totalSaleRate - totalRate; // using totalRate (Purchase Rate)
+
+                // BIRDS SOLD QTTY IN KG = total sale weight
+                const birdsSoldQtyInKg = totalSaleWeight;
+
+                // GROSS PROFIT = BIRDS SOLD QTTY IN KG * PROFIT MARGINE PER KG
+                const grossProfit = birdsSoldQtyInKg * profitMarginPerKg;
+
+                // W LOSS & MORTALITY = natural weight loss/on total + acutual weight loss/on total + birds mortality total
+                const wLossAndMortality = natTotalComputed + actTotalComputed + mortTotalComputed;
+
+                // FEED CONSUMED = previous date feed consume total amount
+                const feedConsumed = prevFeedConsumedAmount;
+
+                // NET PROFIT/LOSS = GROSS PROFIT - W LOSS & MORTALITY - FEED CONSUMED
+                const netProfitLoss = grossProfit - wLossAndMortality - feedConsumed;
+
+                return (
+                    <div className="flex flex-col gap-6 mt-6">
+                        {/* Closing Stock Summary Table */}
+                        <div className="bg-white rounded-lg shadow-md p-6">
+                            <h2 className="text-xl font-bold mb-4 text-gray-800">CLOSING STOCK SUMMARY</h2>
+                            <div className="overflow-x-auto">
+                                <table className="w-full border-collapse border border-gray-300">
+                                    <thead>
+                                        <tr className="bg-gray-100 text-gray-800">
+                                            <th className="border p-2 text-left bg-gray-200">Particulars</th>
+                                            <th className="border p-2 text-center">BIRDS</th>
+                                            <th className="border p-2 text-center">WEIGHT</th>
+                                            <th className="border p-2 text-center">AVG</th>
+                                            <th className="border p-2 text-center">RATE</th>
+                                            <th className="border p-2 text-center">TOTAL</th>
+                                            <th className="border p-2 text-center">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {/* GROSS CLOSING STOCK */}
+                                        <tr className="text-center italic bg-white border-b">
+                                            <td className="border p-2 text-left text-gray-700">GROSS CLOSING STOCK</td>
+                                            <td className="border p-2">{grossBirds}</td>
+                                            <td className="border p-2">{grossWeight.toFixed(2)}</td>
+                                            <td className="border p-2">{grossAvg.toFixed(2)}</td>
+                                            <td className="border p-2">{grossRate.toFixed(2)}</td>
+                                            <td className="border p-2">{grossTotal.toFixed(2)}</td>
+                                            <td className="border p-2"></td>
+                                        </tr>
+
+                                        {/* BIRDS MORTALITY */}
+                                        <tr className="text-center italic bg-white border-b">
+                                            <td className="border p-2 text-left text-gray-700">BIRDS MORTALITY</td>
+                                            <td className="border p-2 font-bold">{mortBirds}</td>
+                                            <td className="border p-2">{mortWeightComputed.toFixed(2)}</td>
+                                            <td className="border p-2">{mortAvg.toFixed(2)}</td>
+                                            <td className="border p-2">{mortRate.toFixed(2)}</td>
+                                            <td className="border p-2">{mortTotalComputed.toFixed(2)}</td>
+                                            <td className="border p-2">
+                                                <button
+                                                    onClick={() => {
+                                                        setIsEditMode(true);
+                                                        if (mortalityStock) {
+                                                            setCurrentStockId(mortalityStock._id);
+                                                            setMortalityData({
+                                                                birds: mortalityStock.birds,
+                                                                weight: mortalityStock.weight,
+                                                                avgWeight: mortalityStock.avgWeight,
+                                                                rate: mortalityStock.rate,
+                                                                amount: mortalityStock.amount,
+                                                                date: mortalityStock.date ? new Date(mortalityStock.date).toISOString().split('T')[0] : ''
+                                                            });
+                                                        } else {
+                                                            setCurrentStockId(null);
+                                                            setMortalityData({ birds: '', weight: '', avgWeight: 0, rate: 0, amount: 0, date: defaultDate });
+                                                        }
+                                                        setShowMortalityModal(true);
+                                                    }}
+                                                    className="text-blue-600 hover:text-blue-800 font-medium"
+                                                >
+                                                    {mortalityStock ? 'Edit' : 'Add'}
+                                                </button>
+                                            </td>
+                                        </tr>
+
+                                        {/* ACTUAL WEIGHT LOSS / ON */}
+                                        <tr className="text-center italic bg-white border-b">
+                                            <td className="border p-2 text-left text-gray-700">ACTUAL WEIGHT LOSS /ON</td>
+                                            <td className="border p-2 text-gray-400">-</td>
+                                            <td className="border p-2 font-bold">{actWeight.toFixed(2)}</td>
+                                            <td className="border p-2 text-gray-400">-</td>
+                                            <td className="border p-2">{actRate.toFixed(2)}</td>
+                                            <td className="border p-2">{actTotalComputed.toFixed(2)}</td>
+                                            <td className="border p-2">
+                                                <button
+                                                    onClick={() => {
+                                                        setIsEditMode(true);
+                                                        if (weightLossStock) {
+                                                            setCurrentStockId(weightLossStock._id);
+                                                            setWeightLossData({
+                                                                birds: 0,
+                                                                weight: weightLossStock.weight,
+                                                                avgWeight: 0,
+                                                                rate: weightLossStock.rate,
+                                                                amount: weightLossStock.amount,
+                                                                date: weightLossStock.date ? new Date(weightLossStock.date).toISOString().split('T')[0] : ''
+                                                            });
+                                                        } else {
+                                                            setCurrentStockId(null);
+                                                            setWeightLossData({
+                                                                birds: 0,
+                                                                weight: '',
+                                                                avgWeight: 0,
+                                                                rate: 0,
+                                                                amount: 0,
+                                                                date: defaultDate
+                                                            });
+                                                        }
+                                                        setShowWeightLossModal(true);
+                                                    }}
+                                                    className="text-blue-600 hover:text-blue-800 font-medium"
+                                                >
+                                                    {weightLossStock ? 'Edit' : 'Add'}
+                                                </button>
+                                            </td>
+                                        </tr>
+
+                                        {/* NATURAL WEIGHT LOSS/ ON */}
+                                        <tr className="text-center italic bg-white border-b">
+                                            <td className="border p-2 text-left text-gray-700">NATURAL WEIGHT LOSS/ ON</td>
+                                            <td className="border p-2 text-gray-400">-</td>
+                                            <td className="border p-2 font-bold">{natWeight.toFixed(2)}</td>
+                                            <td className="border p-2 text-gray-400">-</td>
+                                            <td className="border p-2">{natRate.toFixed(2)}</td>
+                                            <td className="border p-2">{natTotalComputed.toFixed(2)}</td>
+                                            <td className="border p-2"></td>
+                                        </tr>
+
+                                        {/* CLOSING STOCK */}
+                                        <tr className="bg-black text-white font-bold text-center italic">
+                                            <td className="border p-2 text-left">CLOSING STOCK</td>
+                                            <td className="border p-2">{closeBirds}</td>
+                                            <td className="border p-2">{closeWeight.toFixed(2)}</td>
+                                            <td className="border p-2">{closeAvg.toFixed(2)}</td>
+                                            <td className="border p-2">{closeRate.toFixed(2)}</td>
+                                            <td className="border p-2">{closeTotal.toFixed(2)}</td>
+                                            <td className="border p-2"></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col lg:flex-row gap-6">
+                            {/* FEED STOCK SUMMARY TABLE */}
+                            <div className="flex-1 bg-white rounded-lg shadow-md p-6">
+                                <h2 className="text-xl font-bold mb-4 text-orange-600">FEED STOCK SUMMARY</h2>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full border-collapse">
+                                        <thead>
+                                            <tr className="bg-gray-100 text-gray-700">
+                                                <th className="border p-2 text-center"></th>
+                                                <th className="border p-2 text-center">BAG</th>
+                                                <th className="border p-2 text-center">QTTY</th>
+                                                <th className="border p-2 text-center">RATE</th>
+                                                <th className="border p-2 text-center">AMOUNT</th>
+                                                {isSupervisor && <th className="border p-2 text-center">ACTION</th>}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
                                             {/* OP */}
                                             <tr className="text-center font-bold">
                                                 <td className="border p-2">OP</td>
@@ -1478,10 +1674,19 @@ const ManageStocks = () => {
                                                                     // Only allow edit if dateParam is present or logic permits
                                                                     // For now, picking the first one as implied by requirements
                                                                     const stockToEdit = purchStocks[0];
+                                                                    console.log("purchStocks", purchStocks);
+                                                                    console.log("stockToEdit", stockToEdit);
                                                                     setIsEditMode(true);
                                                                     setCurrentStockId(stockToEdit._id);
+
+                                                                    const vId = stockToEdit.vendorId?._id || stockToEdit.vendorId;
+                                                                    const foundVendor = vendors.find(v => (v._id || v.id) === vId);
+                                                                    if (foundVendor) {
+                                                                        setSelectedVendor(foundVendor);
+                                                                    }
+
                                                                     setFeedPurchaseData({
-                                                                        vendorId: stockToEdit.vendorId?._id || stockToEdit.vendorId || '',
+                                                                        vendorId: vId || '',
                                                                         weight: stockToEdit.weight,
                                                                         rate: stockToEdit.rate,
                                                                         amount: stockToEdit.amount,
@@ -1530,85 +1735,60 @@ const ManageStocks = () => {
                                                     </td>
                                                 )}
                                             </tr>
-                                            {/* CLOSING */}
-                                            <tr className="text-center font-bold">
-                                                <td className="border p-2">CLOSING</td>
+                                            {/* CLOSING STOCK */}
+                                            <tr className="bg-orange-100 text-center font-bold">
+                                                <td className="border p-2">CLOSING STOCK</td>
                                                 <td className="border p-2">{closingStats.bags}</td>
                                                 <td className="border p-2">{closingStats.weight.toFixed(2)}</td>
                                                 <td className="border p-2">{closingStats.rate.toFixed(2)}</td>
                                                 <td className="border p-2">{closingStats.amount.toFixed(0)}</td>
                                                 {isSupervisor && <td className="border p-2"></td>}
                                             </tr>
-                                        </>
-                                    );
-                                })()}
-                            </tbody>
-                        </table>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            {/* PROFIT BREAKDOWN Table */}
+                            <div className="flex-1 bg-white rounded-lg shadow-md p-6">
+                                <h2 className="text-xl font-bold mb-4 italic text-center text-gray-800">PROFIT BREAKDOWN</h2>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full border-collapse border border-gray-300">
+                                        <tbody>
+                                            <tr className="border-b">
+                                                <td className="border p-2 italic text-left w-2/3">PROFIT MARGINE PER KG</td>
+                                                <td className="border p-2 text-center font-medium italic">{profitMarginPerKg.toFixed(2)}</td>
+                                            </tr>
+                                            <tr className="border-b">
+                                                <td className="border p-2 italic text-left">BIRDS SOLD QTTY IN KG</td>
+                                                <td className="border p-2 text-center font-medium italic">{birdsSoldQtyInKg.toFixed(2)}</td>
+                                            </tr>
+                                            <tr className="border-b">
+                                                <td className="border p-2 italic text-left font-bold">GROSS PROFIT</td>
+                                                <td className="border p-2 text-center font-bold italic">{grossProfit.toFixed(2)}</td>
+                                            </tr>
+                                            <tr className="border-b">
+                                                <td className="border p-2 italic text-left">W LOSS & MORTALITY</td>
+                                                <td className="border p-2 text-center font-medium italic">{wLossAndMortality.toFixed(2)}</td>
+                                            </tr>
+                                            <tr className="border-b">
+                                                <td className="border p-2 italic text-left">LAST DAY FEED CONSUMED</td>
+                                                <td className="border p-2 text-center font-medium italic">{feedConsumed.toFixed(2)}</td>
+                                            </tr>
+                                            <tr className="bg-black text-white">
+                                                <td className="border p-2 italic text-left font-bold">NET PROFIT/LOSS</td>
+                                                <td className="border p-2 text-center font-bold italic">{netProfitLoss.toFixed(2)}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
+                );
+            })()}
 
-            {/* CLOSING STOCK DETAILS */}
-            <div className="bg-white rounded-lg shadow-md p-6 mt-6 mb-6">
-                <h2 className="text-xl font-bold mb-4 text-purple-600">CLOSING STOCK</h2>
-                <div className="overflow-x-auto">
-                    <table className="w-full border-collapse">
-                        <thead>
-                            <tr className="bg-purple-100 text-purple-900">
-                                <th className="border p-2 text-center">Particulars</th>
-                                <th className="border p-2 text-center">Birds</th>
-                                <th className="border p-2 text-center">Weight</th>
-                                <th className="border p-2 text-center">Avg</th>
-                                <th className="border p-2 text-center">Rate</th>
-                                <th className="border p-2 text-center">Amount</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr className="text-center font-bold">
-                                <td className="border p-2">CLOSING STOCK</td>
-                                <td className="border p-2">
-                                    {(() => {
-                                        const wLossBirds = (Number(mortalityStock?.birds) || 0) + (Number(weightLossStock?.birds) || 0);
-                                        return (totalBirds - totalSaleBirds - wLossBirds);
-                                    })()}
-                                </td>
-                                <td className="border p-2">
-                                    {(() => {
-                                        const wLossWeight = (Number(mortalityStock?.weight) || 0) + (Number(weightLossStock?.weight) || 0);
-                                        return (totalWeight - totalSaleWeight - wLossWeight).toFixed(2);
-                                    })()}
-                                </td>
-                                <td className="border p-2">
-                                    {(() => {
-                                        const wLossBirds = (Number(mortalityStock?.birds) || 0) + (Number(weightLossStock?.birds) || 0);
-                                        const wLossWeight = (Number(mortalityStock?.weight) || 0) + (Number(weightLossStock?.weight) || 0);
-                                        const closingBirds = totalBirds - totalSaleBirds - wLossBirds;
-                                        const closingWeight = totalWeight - totalSaleWeight - wLossWeight;
-                                        return closingBirds > 0 ? (closingWeight / closingBirds).toFixed(2) : '0.00';
-                                    })()}
-                                </td>
-                                <td className="border p-2">
-                                    {(() => {
-                                        const wLossWeight = (Number(mortalityStock?.weight) || 0) + (Number(weightLossStock?.weight) || 0);
-                                        const wLossAmount = (Number(mortalityStock?.amount) || 0) + (Number(weightLossStock?.amount) || 0);
 
-                                        const closingWeight = totalWeight - totalSaleWeight - wLossWeight;
-                                        const closingAmount = totalAmount - totalSaleAmount - wLossAmount;
-
-                                        return closingWeight > 0 ? (closingAmount / closingWeight).toFixed(2) : '0.00';
-                                    })()}
-                                </td>
-                                <td className="border p-2">
-                                    {(() => {
-                                        const wLossAmount = (Number(mortalityStock?.amount) || 0) + (Number(weightLossStock?.amount) || 0);
-                                        return (totalAmount - totalSaleAmount - wLossAmount).toFixed(0);
-                                    })()}
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
 
 
 
@@ -2150,7 +2330,8 @@ const ManageStocks = () => {
 
                         </div>
                     </div>
-                )}
+                )
+            }
 
             {/* Feed Opening Stock Modal */}
             {
@@ -2236,12 +2417,12 @@ const ManageStocks = () => {
                     </div>
                 )
             }
-            {/* Weight Loss / Weight ON Modal */}
+            {/* Actual Weight Loss Modal */}
             {
                 showWeightLossModal && (
                     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
                         <div className="bg-white p-6 rounded-lg w-full max-w-lg">
-                            <h3 className="text-xl font-bold mb-4">{isEditMode ? 'Edit Weight Loss/Gain' : 'Add Weight Loss / Weight ON'}</h3>
+                            <h3 className="text-xl font-bold mb-4">{isEditMode ? 'Edit Actual Weight Loss/On' : 'Add Actual Weight Loss/On'}</h3>
                             <form onSubmit={handleWeightLossSubmit} className="space-y-4">
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
@@ -2250,7 +2431,7 @@ const ManageStocks = () => {
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium">Weight <span className="text-red-500">*</span></label>
-                                        <input type="number" value={weightLossData.weight} onChange={e => setWeightLossData({ ...weightLossData, weight: e.target.value })} className="w-full border p-2 rounded" required placeholder="Enter weight loss (negative) or gain (positive)" />
+                                        <input type="number" value={weightLossData.weight} onChange={e => setWeightLossData({ ...weightLossData, weight: e.target.value })} className="w-full border p-2 rounded" required placeholder="Enter weight loss (positive for loss)" />
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
@@ -2276,183 +2457,266 @@ const ManageStocks = () => {
                     </div>
                 )
             }
+            {/* Natural Weight Loss Modal */}
+            {
+                showNaturalWeightLossModal && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                        <div className="bg-white p-6 rounded-lg w-full max-w-lg">
+                            <h3 className="text-xl font-bold mb-4">{isEditMode ? 'Edit Natural Weight Loss' : 'Add Natural Weight Loss'}</h3>
+                            <form onSubmit={handleNaturalWeightLossSubmit} className="space-y-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium">Birds (Readonly)</label>
+                                        <input type="text" value="-" className="w-full border p-2 rounded bg-gray-100" readOnly />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium">Weight <span className="text-red-500">*</span></label>
+                                        <input type="number" value={naturalWeightLossData.weight} onChange={e => setNaturalWeightLossData({ ...naturalWeightLossData, weight: e.target.value })} className="w-full border p-2 rounded" required placeholder="Enter natural weight loss" />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium">AVG (Kg/bird)</label>
+                                        <input type="text" value="-" className="w-full border p-2 rounded bg-gray-100" readOnly />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium">Rate</label>
+                                        <input type="number" value={naturalWeightLossData.rate} className="w-full border p-2 rounded bg-gray-100" readOnly />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium">Amount</label>
+                                    <input type="number" value={naturalWeightLossData.amount} className="w-full border p-2 rounded bg-gray-100" readOnly />
+                                </div>
+                                <div className="flex justify-end gap-2 mt-4">
+                                    <button type="button" onClick={() => setShowNaturalWeightLossModal(false)} className="px-4 py-2 border rounded">Cancel</button>
+                                    <button type="submit" className="px-4 py-2 bg-purple-600 text-white rounded">Submit</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )
+            }
             {/* Feed Purchase Modal */}
-            {showFeedPurchaseModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                    <div className="bg-white rounded-lg p-6 max-w-md w-full">
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold">{isEditMode ? 'Edit Feed Purchase' : 'Add Feed Purchase'}</h2>
-                            <button onClick={() => setShowFeedPurchaseModal(false)} className="text-gray-500 hover:text-gray-700">
-                                <X size={24} />
-                            </button>
-                        </div>
-                        <form onSubmit={handleFeedPurchaseSubmit} className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Vendor <span className="text-red-500">*</span></label>
-                                <div className="relative">
-                                    <input
-                                        type="text"
-                                        value={selectedVendor ? `${selectedVendor.vendorName}` : vendorSearchTerm}
-                                        onChange={(e) => {
-                                            setVendorSearchTerm(e.target.value);
-                                            setSelectedVendor(null);
-                                            setFeedPurchaseData(prev => ({ ...prev, vendorId: '' }));
-                                        }}
-                                        onFocus={() => setShowVendorDropdown(true)}
-                                        onBlur={() => setTimeout(() => setShowVendorDropdown(false), 200)}
-                                        placeholder="Search vendor..."
-                                        className="w-full border p-2 rounded"
-                                    />
-                                    {showVendorDropdown && filteredVendors.length > 0 && (
-                                        <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-40 overflow-y-auto">
-                                            {filteredVendors.map((vendor) => (
-                                                <div
-                                                    key={vendor._id}
-                                                    onMouseDown={() => {
-                                                        setSelectedVendor(vendor);
-                                                        setFeedPurchaseData(prev => ({ ...prev, vendorId: vendor._id }));
-                                                        setShowVendorDropdown(false);
-                                                    }}
-                                                    className="px-3 py-2 cursor-pointer hover:bg-gray-100"
-                                                >
-                                                    {vendor.vendorName}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
+            {
+                showFeedPurchaseModal && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                        <div className="bg-white rounded-lg p-6 max-w-md w-full">
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-xl font-bold">{isEditMode ? 'Edit Feed Purchase' : 'Add Feed Purchase'}</h2>
+                                <button onClick={() => setShowFeedPurchaseModal(false)} className="text-gray-500 hover:text-gray-700">
+                                    <X size={24} />
+                                </button>
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Date</label>
-                                <input
-                                    type="date"
-                                    value={feedPurchaseData.date}
-                                    onChange={(e) => setFeedPurchaseData({ ...feedPurchaseData, date: e.target.value })}
-                                    className={`w-full border rounded p-2 ${isEditMode ? 'bg-gray-100' : ''}`}
-                                    required
-                                    readOnly={isEditMode}
-                                />
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
+                            <form onSubmit={handleFeedPurchaseSubmit} className="space-y-4">
                                 <div>
-                                    <label className="block text-sm font-medium mb-1">Bags</label>
+                                    <label className="block text-sm font-medium mb-1">Vendor <span className="text-red-500">*</span></label>
+                                    <div className="relative">
+                                        <input
+                                            type="text"
+                                            value={selectedVendor ? `${selectedVendor.vendorName}` : vendorSearchTerm}
+                                            onChange={(e) => {
+                                                setVendorSearchTerm(e.target.value);
+                                                setSelectedVendor(null);
+                                                setFeedPurchaseData(prev => ({ ...prev, vendorId: '' }));
+                                            }}
+                                            onFocus={() => setShowVendorDropdown(true)}
+                                            onBlur={() => setTimeout(() => setShowVendorDropdown(false), 200)}
+                                            placeholder="Search vendor..."
+                                            className="w-full border p-2 rounded"
+                                        />
+                                        {showVendorDropdown && filteredVendors.length > 0 && (
+                                            <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-40 overflow-y-auto">
+                                                {filteredVendors.map((vendor) => (
+                                                    <div
+                                                        key={vendor._id || vendor.id}
+                                                        onMouseDown={() => {
+                                                            setSelectedVendor(vendor);
+                                                            setFeedPurchaseData(prev => ({ ...prev, vendorId: vendor._id || vendor.id }));
+                                                            setShowVendorDropdown(false);
+                                                        }}
+                                                        className="px-3 py-2 cursor-pointer hover:bg-gray-100"
+                                                    >
+                                                        {vendor.vendorName}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Date</label>
                                     <input
-                                        type="number"
-                                        value={feedPurchaseData.bags}
-                                        onChange={(e) => setFeedPurchaseData({ ...feedPurchaseData, bags: e.target.value })}
-                                        className="w-full border rounded p-2"
+                                        type="date"
+                                        value={feedPurchaseData.date}
+                                        onChange={(e) => setFeedPurchaseData({ ...feedPurchaseData, date: e.target.value })}
+                                        className={`w-full border rounded p-2 ${isEditMode ? 'bg-gray-100' : ''}`}
                                         required
+                                        readOnly={true}
+                                    //readOnly={isEditMode}
                                     />
                                 </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Bags</label>
+                                        <input
+                                            type="number"
+                                            value={feedPurchaseData.bags}
+                                            onChange={(e) => setFeedPurchaseData({ ...feedPurchaseData, bags: e.target.value })}
+                                            className="w-full border rounded p-2"
+                                            required
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Quantity (Kg)</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={feedPurchaseData.weight}
+                                            onChange={(e) => setFeedPurchaseData({ ...feedPurchaseData, weight: e.target.value })}
+                                            className="w-full border rounded p-2"
+                                            required
+                                        />
+                                    </div>
+                                </div>
                                 <div>
-                                    <label className="block text-sm font-medium mb-1">Quantity (Kg)</label>
+                                    <label className="block text-sm font-medium mb-1">Rate (per Kg)</label>
                                     <input
                                         type="number"
                                         step="0.01"
-                                        value={feedPurchaseData.weight}
-                                        onChange={(e) => setFeedPurchaseData({ ...feedPurchaseData, weight: e.target.value })}
+                                        value={feedPurchaseData.rate}
+                                        onChange={(e) => setFeedPurchaseData({ ...feedPurchaseData, rate: e.target.value })}
                                         className="w-full border rounded p-2"
                                         required
                                     />
                                 </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Rate (per Kg)</label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    value={feedPurchaseData.rate}
-                                    onChange={(e) => setFeedPurchaseData({ ...feedPurchaseData, rate: e.target.value })}
-                                    className="w-full border rounded p-2"
-                                    required
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Amount</label>
-                                <input
-                                    type="number"
-                                    value={feedPurchaseData.amount}
-                                    readOnly
-                                    className="w-full border rounded p-2 bg-gray-100"
-                                />
-                            </div>
-                            <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
-                                {isEditMode ? 'Update Purchase' : 'Add Purchase'}
-                            </button>
-                        </form>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Amount</label>
+                                    <input
+                                        type="number"
+                                        value={feedPurchaseData.amount}
+                                        readOnly
+                                        className="w-full border rounded p-2 bg-gray-100"
+                                    />
+                                </div>
+                                <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
+                                    {isEditMode ? 'Update Purchase' : 'Add Purchase'}
+                                </button>
+                            </form>
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
             {/* Feed Consume Modal */}
-            {showFeedConsumeModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                    <div className="bg-white rounded-lg p-6 max-w-md w-full">
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold">{isEditMode ? 'Edit Feed Consumption' : 'Add Feed Consumption'}</h2>
-                            <button onClick={() => setShowFeedConsumeModal(false)} className="text-gray-500 hover:text-gray-700">
-                                <X size={24} />
-                            </button>
-                        </div>
-                        <form onSubmit={handleFeedConsumeSubmit} className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Date</label>
-                                <input
-                                    type="date"
-                                    value={feedConsumeData.date}
-                                    onChange={(e) => setFeedConsumeData({ ...feedConsumeData, date: e.target.value })}
-                                    className={`w-full border rounded p-2 ${isEditMode ? 'bg-gray-100' : ''}`}
-                                    required
-                                    readOnly={isEditMode}
-                                />
+            {
+                showFeedConsumeModal && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                        <div className="bg-white rounded-lg p-6 max-w-md w-full">
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-xl font-bold">{isEditMode ? 'Edit Feed Consumption' : 'Add Feed Consumption'}</h2>
+                                <button onClick={() => setShowFeedConsumeModal(false)} className="text-gray-500 hover:text-gray-700">
+                                    <X size={24} />
+                                </button>
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
+                            <form onSubmit={handleFeedConsumeSubmit} className="space-y-4">
                                 <div>
-                                    <label className="block text-sm font-medium mb-1">Bags</label>
+                                    <label className="block text-sm font-medium mb-1">Date</label>
                                     <input
-                                        type="number"
-                                        value={feedConsumeData.bags}
-                                        onChange={(e) => setFeedConsumeData({ ...feedConsumeData, bags: e.target.value })}
-                                        className="w-full border rounded p-2"
+                                        type="date"
+                                        value={feedConsumeData.date}
+                                        onChange={(e) => setFeedConsumeData({ ...feedConsumeData, date: e.target.value })}
+                                        className={`w-full border rounded p-2 ${isEditMode ? 'bg-gray-100' : ''}`}
                                         required
+                                        readOnly={true}
+                                    //readOnly={isEditMode}
                                     />
                                 </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Bags</label>
+                                        <input
+                                            type="number"
+                                            value={feedConsumeData.bags}
+                                            onChange={(e) => setFeedConsumeData({ ...feedConsumeData, bags: e.target.value })}
+                                            className="w-full border rounded p-2"
+                                            required
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Quantity (Kg)</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={feedConsumeData.weight}
+                                            onChange={(e) => setFeedConsumeData({ ...feedConsumeData, weight: e.target.value })}
+                                            className="w-full border rounded p-2"
+                                            required
+                                        />
+                                    </div>
+                                </div>
                                 <div>
-                                    <label className="block text-sm font-medium mb-1">Quantity (Kg)</label>
+                                    <label className="block text-sm font-medium mb-1">Rate (per Kg)</label>
                                     <input
                                         type="number"
                                         step="0.01"
-                                        value={feedConsumeData.weight}
-                                        onChange={(e) => setFeedConsumeData({ ...feedConsumeData, weight: e.target.value })}
+                                        value={feedConsumeData.rate}
+                                        onChange={(e) => setFeedConsumeData({ ...feedConsumeData, rate: e.target.value })}
                                         className="w-full border rounded p-2"
                                         required
                                     />
                                 </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Rate (per Kg)</label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    value={feedConsumeData.rate}
-                                    onChange={(e) => setFeedConsumeData({ ...feedConsumeData, rate: e.target.value })}
-                                    className="w-full border rounded p-2"
-                                    required
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Amount</label>
-                                <input
-                                    type="number"
-                                    value={feedConsumeData.amount}
-                                    readOnly
-                                    className="w-full border rounded p-2 bg-gray-100"
-                                />
-                            </div>
-                            <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
-                                {isEditMode ? 'Update Consumption' : 'Add Consumption'}
-                            </button>
-                        </form>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Amount</label>
+                                    <input
+                                        type="number"
+                                        value={feedConsumeData.amount}
+                                        readOnly
+                                        className="w-full border rounded p-2 bg-gray-100"
+                                    />
+                                </div>
+                                <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
+                                    {isEditMode ? 'Update Consumption' : 'Add Consumption'}
+                                </button>
+                            </form>
+                        </div>
                     </div>
+                )
+            }
+
+            {/* Pagination Footer */}
+            {dateParam && (
+                <div className="flex justify-between items-center mt-8 pb-8 pt-4 border-t border-gray-200">
+                    <button
+                        onClick={() => {
+                            const dateObj = new Date(dateParam);
+                            dateObj.setDate(dateObj.getDate() - 1);
+                            const prevDate = dateObj.toISOString().split('T')[0];
+                            const basePath = user?.role === 'supervisor' ? '/supervisor/stocks/manage' : '/stocks/manage';
+                            navigate(`${basePath}?date=${prevDate}`);
+                        }}
+                        className="flex items-center gap-2 px-6 py-3 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-300 transition-all text-gray-700 font-medium"
+                    >
+                        <ChevronLeft size={20} />
+                        Previous Day
+                    </button>
+
+                    <span className="text-gray-500 font-medium hidden sm:block">
+                        {new Date(dateParam).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                    </span>
+
+                    <button
+                        onClick={() => {
+                            const dateObj = new Date(dateParam);
+                            dateObj.setDate(dateObj.getDate() + 1);
+                            const nextDate = dateObj.toISOString().split('T')[0];
+                            const basePath = user?.role === 'supervisor' ? '/supervisor/stocks/manage' : '/stocks/manage';
+                            navigate(`${basePath}?date=${nextDate}`);
+                        }}
+                        className="flex items-center gap-2 px-6 py-3 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-300 transition-all text-gray-700 font-medium"
+                    >
+                        Next Day
+                        <ChevronRight size={20} />
+                    </button>
                 </div>
             )}
         </div >
