@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Loader2, Download } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import api from '../lib/axios';
@@ -8,7 +8,12 @@ import { useAuth } from '../contexts/AuthContext';
 export default function MonthlySummary() {
     const { type, id } = useParams();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const { user } = useAuth();
+
+    const groupName = searchParams.get('groupName') || '';
+    const isFeedGroup = groupName.toLowerCase().includes('feed');
+    const isSundryGroup = type === 'customer' || type === 'vendor' || groupName.toLowerCase().includes('debtor') || groupName.toLowerCase().includes('creditor') || groupName.toLowerCase().includes('sundry');
 
     const [loading, setLoading] = useState(true);
     const [data, setData] = useState(null);
@@ -61,7 +66,8 @@ export default function MonthlySummary() {
 
         const targetPath = type === 'customer' ? `/customers/${id}` :
             type === 'vendor' ? `/vendors/${id}` :
-                type === 'ledger' ? `/ledgers/${id}` : null;
+                type === 'ledger' ? `/ledgers/${id}` :
+                    type === 'dieselStation' ? `/diesel-stations/${id}` : null;
 
         const filterType = new URLSearchParams(window.location.search).get('filterType');
 
@@ -77,24 +83,63 @@ export default function MonthlySummary() {
     const handleExportToExcel = () => {
         if (!data) return;
 
-        const exportData = data.months.map(month => ({
-            Month: month.name,
-            'Total Birds': month.birds || 0,
-            'Total Weight': month.weight ? parseFloat(month.weight.toFixed(2)) : 0,
-            'Debit (Sales)': month.debit || 0,
-            'Credit (Receipts)': month.credit || 0,
-            'Closing Balance': `${month.closingBalance.toFixed(2)} ${month.closingBalanceType === 'credit' ? 'Cr' : 'Dr'}`
-        }));
+        const exportData = data.months.map(month => {
+            const row = {
+                Month: month.name,
+            };
+
+            if (type === 'dieselStation') {
+                row['Total Volume'] = month.volume || 0;
+                row['Total Rate/ltr'] = month.volume ? parseFloat((month.credit / month.volume).toFixed(2)) : '-';
+            } else {
+                const groupName = searchParams.get('groupName') || '';
+                const isFeedGroup = groupName.toLowerCase().includes('feed');
+
+                if (isSundryGroup) {
+                    if (isFeedGroup) {
+                        row['Total Bags'] = month.birds || 0;
+                        row['Total Quantity (Kg)'] = month.weight ? parseFloat(month.weight.toFixed(2)) : 0;
+                    } else {
+                        row['Total Birds'] = month.birds || 0;
+                        row['Total Weight'] = month.weight ? parseFloat(month.weight.toFixed(2)) : 0;
+                    }
+                }
+            }
+
+            row[isSundryGroup ? 'Debit (Receipts)' : 'Debit'] = month.debit || 0;
+            row[isSundryGroup ? 'Credit (Sales)' : 'Credit'] = month.credit || 0;
+            row['Closing Balance'] = `${month.closingBalance.toFixed(2)} ${month.closingBalanceType === 'credit' ? 'Cr' : 'Dr'}`;
+
+            return row;
+        });
 
         // Add Totals Row
-        exportData.push({
+        const totalRow = {
             Month: 'Grand Total',
-            'Total Birds': data.totals.birds || 0,
-            'Total Weight': data.totals.weight ? parseFloat(data.totals.weight.toFixed(2)) : 0,
-            'Debit (Sales)': data.totals.debit || 0,
-            'Credit (Receipts)': data.totals.credit || 0,
-            'Closing Balance': `${data.months[data.months.length - 1].closingBalance.toFixed(2)} ${data.months[data.months.length - 1].closingBalanceType === 'credit' ? 'Cr' : 'Dr'}`
-        });
+        };
+
+        if (type === 'dieselStation') {
+            totalRow['Total Volume'] = data.totals.volume || 0;
+            totalRow['Total Rate/ltr'] = data.totals.volume ? parseFloat((data.totals.credit / data.totals.volume).toFixed(2)) : '-';
+        } else {
+            if (isSundryGroup) {
+                const groupName = searchParams.get('groupName') || '';
+                const isFeedGroup = groupName.toLowerCase().includes('feed');
+                if (isFeedGroup) {
+                    totalRow['Total Bags'] = data.totals.birds || 0;
+                    totalRow['Total Quantity (Kg)'] = data.totals.weight ? parseFloat(data.totals.weight.toFixed(2)) : 0;
+                } else {
+                    totalRow['Total Birds'] = data.totals.birds || 0;
+                    totalRow['Total Weight'] = data.totals.weight ? parseFloat(data.totals.weight.toFixed(2)) : 0;
+                }
+            }
+        }
+
+        totalRow[isSundryGroup ? 'Debit (Receipts)' : 'Debit'] = data.totals.debit || 0;
+        totalRow[isSundryGroup ? 'Credit (Sales)' : 'Credit'] = data.totals.credit || 0;
+        totalRow['Closing Balance'] = `${data.months[data.months.length - 1].closingBalance.toFixed(2)} ${data.months[data.months.length - 1].closingBalanceType === 'credit' ? 'Cr' : 'Dr'}`;
+
+        exportData.push(totalRow);
 
         const ws = XLSX.utils.json_to_sheet(exportData);
         const wb = XLSX.utils.book_new();
@@ -142,6 +187,8 @@ export default function MonthlySummary() {
         <button onClick={fetchMonthlySummary} className="px-4 py-2 bg-blue-600 text-white rounded">Retry</button>
     </div>;
     if (!data) return null;
+    console.log("groupName", groupName)
+
 
     return (
         <div className="space-y-6">
@@ -191,17 +238,33 @@ export default function MonthlySummary() {
                         </span>
                     </div>
                 </div>
-
+                {hasAdminAccess && (
+                    <div className="text-gray-500 mb-4">
+                        <p className="text-sm">
+                            Group: {searchParams.get('groupName')}
+                        </p>
+                    </div>
+                )}
                 <div className="overflow-x-auto">
-                    <table className="w-full border-collapse">
-                        <thead>
-                            <tr className="border-b-2 border-gray-300 bg-gray-50">
-                                <th className="text-left py-3 px-4 font-semibold text-gray-900">Month</th>
-                                <th className="text-right py-3 px-4 font-semibold text-gray-900">Total Birds</th>
-                                <th className="text-right py-3 px-4 font-semibold text-gray-900">Total Weight</th>
-                                <th className="text-right py-3 px-4 font-semibold text-gray-900">Debit (Sales)</th>
-                                <th className="text-right py-3 px-4 font-semibold text-gray-900">Credit (Receipts)</th>
-                                <th className="text-right py-3 px-4 font-semibold text-gray-900">Closing Balance</th>
+                    <table className="w-full text-sm">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                            <tr>
+                                <th className="px-6 py-3 text-left font-medium text-gray-700">Month</th>
+                                {/* Conditional Headers */}
+                                {type === 'dieselStation' ? (
+                                    <>
+                                        <th className="px-6 py-3 text-right font-medium text-gray-700">Total Volume</th>
+                                        <th className="px-6 py-3 text-right font-medium text-gray-700">Total Rate/ltr</th>
+                                    </>
+                                ) : isSundryGroup ? (
+                                    <>
+                                        <th className="px-6 py-3 text-right font-medium text-gray-700">{isFeedGroup ? 'Total Bags' : 'Total Birds'}</th>
+                                        <th className="px-6 py-3 text-right font-medium text-gray-700">{isFeedGroup ? 'Total Quantity (Kg)' : 'Total Weight'}</th>
+                                    </>
+                                ) : null}
+                                <th className="px-6 py-3 text-right font-medium text-gray-700">{isSundryGroup ? 'Debit (Receipts)' : 'Debit'}</th>
+                                <th className="px-6 py-3 text-right font-medium text-gray-700">{isSundryGroup ? 'Credit (Sales)' : 'Credit'}</th>
+                                <th className="px-6 py-3 text-right font-medium text-gray-700">Closing Balance</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -211,13 +274,28 @@ export default function MonthlySummary() {
                                     className="border-b border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors"
                                     onClick={() => handleMonthClick(month)}
                                 >
-                                    <td className="py-3 px-4 text-blue-600 font-medium hover:underline">{month.name}</td>
-                                    <td className="py-3 px-4 text-right text-gray-700">
-                                        {renderCellWithPercentage(month.birds, data.totals.birds)}
+                                    <td className="py-3 px-4 text-blue-600 font-medium hover:underline">
+                                        {new Date(month.startDate).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}
                                     </td>
-                                    <td className="py-3 px-4 text-right text-gray-700">
-                                        {renderCellWithPercentage(month.weight, data.totals.weight, 'weight')}
-                                    </td>
+                                    {type === 'dieselStation' ? (
+                                        <>
+                                            <td className="py-3 px-4 text-right text-gray-700">
+                                                {renderCellWithPercentage(month.volume, data.totals.volume, 'weight')}
+                                            </td>
+                                            <td className="py-3 px-4 text-right text-gray-700">
+                                                {month.volume ? (month.credit / month.volume).toFixed(2) : '-'}
+                                            </td>
+                                        </>
+                                    ) : isSundryGroup ? (
+                                        <>
+                                            <td className="py-3 px-4 text-right text-gray-700">
+                                                {renderCellWithPercentage(month.birds, data.totals.birds)}
+                                            </td>
+                                            <td className="py-3 px-4 text-right text-gray-700">
+                                                {renderCellWithPercentage(month.weight, data.totals.weight, 'weight')}
+                                            </td>
+                                        </>
+                                    ) : null}
                                     <td className="py-3 px-4 text-right text-gray-700">
                                         {renderCellWithPercentage(month.debit, data.totals.debit, 'currency')}
                                     </td>
@@ -232,12 +310,25 @@ export default function MonthlySummary() {
                             ))}
                             <tr className="bg-gray-100 font-bold border-t-2 border-gray-300">
                                 <td className="py-3 px-4 text-gray-900">Total</td>
-                                <td className="py-3 px-4 text-right text-gray-900">
-                                    {renderCellWithPercentage(data.totals.birds, data.totals.birds)}
-                                </td>
-                                <td className="py-3 px-4 text-right text-gray-900">
-                                    {renderCellWithPercentage(data.totals.weight, data.totals.weight, 'weight')}
-                                </td>
+                                {type === 'dieselStation' ? (
+                                    <>
+                                        <td className="py-3 px-4 text-right text-gray-900">
+                                            {renderCellWithPercentage(data.totals.volume, data.totals.volume, 'weight')}
+                                        </td>
+                                        <td className="py-3 px-4 text-right text-gray-900">
+                                            {data.totals.volume ? (data.totals.credit / data.totals.volume).toFixed(2) : '-'}
+                                        </td>
+                                    </>
+                                ) : isSundryGroup ? (
+                                    <>
+                                        <td className="py-3 px-4 text-right text-gray-900">
+                                            {renderCellWithPercentage(data.totals.birds, data.totals.birds)}
+                                        </td>
+                                        <td className="py-3 px-4 text-right text-gray-900">
+                                            {renderCellWithPercentage(data.totals.weight, data.totals.weight, 'weight')}
+                                        </td>
+                                    </>
+                                ) : null}
                                 <td className="py-3 px-4 text-right text-gray-900">
                                     {renderCellWithPercentage(data.totals.debit, data.totals.debit, 'currency')}
                                 </td>

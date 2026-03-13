@@ -31,6 +31,7 @@ import VoucherDetails from './pages/VoucherDetails';
 import Groups from './pages/Groups';
 import Ledgers from './pages/Ledgers';
 import DieselStations from './pages/DieselStations';
+import DieselStationDetails from './pages/DieselStationDetails';
 import LedgerDetails from './pages/LedgerDetails';
 import LedgerMonthlySummary from './pages/LedgerMonthlySummary';
 import LedgerDailySummary from './pages/LedgerDailySummary';
@@ -53,6 +54,14 @@ import SupervisorHeader from './components/SupervisorHeader';
 import ManageStocks from './pages/ManageStocks';
 import StockMonthlySummary from './pages/StockMonthlySummary';
 import StockDailySummary from './pages/StockDailySummary';
+import BirdsStockMonthlySummary from './pages/BirdsStockMonthlySummary';
+import BirdsStockDailySummary from './pages/BirdsStockDailySummary';
+import BirdsStockRecord from './pages/BirdsStockRecord';
+
+import FeedStockMonthlySummary from './pages/FeedStockMonthlySummary';
+import FeedStockDailySummary from './pages/FeedStockDailySummary';
+import FeedStockRecord from './pages/FeedStockRecord';
+
 import BottomNavigation from './components/BottomNavigation';
 
 // Customer Components
@@ -185,6 +194,7 @@ const AppContent = () => {
               <Route path="/ledgers/:id/daily" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><LedgerDailySummary /></ProtectedRoute>} />
               <Route path="/ledgers/:id" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><LedgerDetails /></ProtectedRoute>} />
               <Route path="/diesel-stations" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><DieselStations /></ProtectedRoute>} />
+              <Route path="/diesel-stations/:id" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><DieselStationDetails /></ProtectedRoute>} />
               <Route path="/balance-sheet" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><BalanceSheet /></ProtectedRoute>} />
               <Route path="/group-summary/:id" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><GroupSummary /></ProtectedRoute>} />
               <Route path="/monthly-summary/:type/:id" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><MonthlySummary /></ProtectedRoute>} />
@@ -194,6 +204,14 @@ const AppContent = () => {
               <Route path="/stocks" element={<StockMonthlySummary />} />
               <Route path="/stocks/daily" element={<StockDailySummary />} />
               <Route path="/stocks/manage" element={<ManageStocks />} />
+              <Route path="/birds-stock/monthly-summary" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><BirdsStockMonthlySummary /></ProtectedRoute>} />
+              <Route path="/birds-stock/daily-summary" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><BirdsStockDailySummary /></ProtectedRoute>} />
+              <Route path="/birds-stock/final-records" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><BirdsStockRecord /></ProtectedRoute>} />
+
+              <Route path="/feed-stock/monthly-summary" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><FeedStockMonthlySummary /></ProtectedRoute>} />
+              <Route path="/feed-stock/daily-summary" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><FeedStockDailySummary /></ProtectedRoute>} />
+              <Route path="/feed-stock/final-records" element={<ProtectedRoute allowedRoles={["admin", "superadmin"]}><FeedStockRecord /></ProtectedRoute>} />
+
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </main>

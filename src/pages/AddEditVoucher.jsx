@@ -13,6 +13,7 @@ import {
   CheckCircle
 } from 'lucide-react';
 import api from '../lib/axios';
+import Select from 'react-select';
 
 const ALLOWED_VOUCHER_TYPES = ['Payment', 'Receipt', 'Contra', 'Journal'];
 
@@ -27,8 +28,9 @@ const AddEditVoucher = () => {
   const [customersWithLedgers, setCustomersWithLedgers] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [ledgers, setLedgers] = useState([]);
+  const [dieselStations, setDieselStations] = useState([]);
   const [cashBankLedgers, setCashBankLedgers] = useState([]);
-  const [allParties, setAllParties] = useState([]); // Combined list of customers, ledgers, and vendors
+  const [allParties, setAllParties] = useState([]); // Combined list of customers, ledgers, vendors, and diesel stations
   const [partyBalanceLabel, setPartyBalanceLabel] = useState('');
 
   const [formData, setFormData] = useState({
@@ -105,20 +107,23 @@ const AddEditVoucher = () => {
 
   const fetchMasterData = async () => {
     try {
-      const [customersRes, vendorsRes, ledgersRes] = await Promise.all([
+      const [customersRes, vendorsRes, ledgersRes, dieselStationsRes] = await Promise.all([
         api.get('/customer'),
         api.get('/vendor'),
-        api.get('/ledger')
+        api.get('/ledger'),
+        api.get('/diesel-stations')
       ]);
 
       const allCustomers = customersRes.data.success ? customersRes.data.data : [];
       const allVendors = vendorsRes.data.success ? vendorsRes.data.data : [];
       const allLedgers = ledgersRes.data.success ? (ledgersRes.data.data || []) : [];
+      const allDieselStations = dieselStationsRes.data.success ? (dieselStationsRes.data.data || []) : [];
 
       // Set individual state
       setCustomers(allCustomers);
       setVendors(allVendors);
       setLedgers(allLedgers);
+      setDieselStations(allDieselStations);
 
       // Filter Cash and Bank Accounts ledgers
       const cashBankLedgersData = allLedgers.filter(ledger => {
@@ -177,6 +182,16 @@ const AddEditVoucher = () => {
         });
       });
 
+      // Add diesel stations
+      allDieselStations.forEach(station => {
+        partiesList.push({
+          id: station.id || station._id,
+          name: station.name || 'N/A',
+          type: 'dieselStation', // Keep this distinct for handling, but conceptually it works like a ledger
+          data: station
+        });
+      });
+
       setAllParties(partiesList);
     } catch (error) {
       console.error('Error fetching master data:', error);
@@ -199,6 +214,8 @@ const AddEditVoucher = () => {
           // Handle Payment/Receipt voucher structure
           const partiesData = await Promise.all(
             voucher.parties.map(async (partyItem) => {
+              // Handle populated partyId
+              const actualPartyId = partyItem.partyId?._id || partyItem.partyId?.id || partyItem.partyId;
               const partyType = partyItem.partyType || 'customer'; // Default to customer for backward compatibility
               let partyName = '';
               let balance = 0;
@@ -206,7 +223,7 @@ const AddEditVoucher = () => {
 
               try {
                 if (partyType === 'customer') {
-                  const customerRes = await api.get(`/customer/${partyItem.partyId}`);
+                  const customerRes = await api.get(`/customer/${actualPartyId}`);
                   if (customerRes.data.success) {
                     const customer = customerRes.data.data;
                     partyName = customer.shopName || customer.ownerName || 'N/A';
@@ -214,7 +231,7 @@ const AddEditVoucher = () => {
                     balanceType = customer.outstandingBalanceType || customer.openingBalanceType || 'debit';
                   }
                 } else if (partyType === 'ledger') {
-                  const ledgerRes = await api.get(`/ledger/${partyItem.partyId}`);
+                  const ledgerRes = await api.get(`/ledger/${actualPartyId}`);
                   if (ledgerRes.data.success) {
                     const ledger = ledgerRes.data.data;
                     partyName = ledger.name || 'N/A';
@@ -222,20 +239,28 @@ const AddEditVoucher = () => {
                     balanceType = ledger.outstandingBalanceType || ledger.openingBalanceType || 'debit';
                   }
                 } else if (partyType === 'vendor') {
-                  const vendorRes = await api.get(`/vendor/${partyItem.partyId}`);
+                  const vendorRes = await api.get(`/vendor/${actualPartyId}`);
                   if (vendorRes.data.success) {
                     const vendor = vendorRes.data.data;
                     partyName = vendor.vendorName || 'N/A';
                     balance = vendor.outstandingBalance || vendor.openingBalance || 0;
                     balanceType = vendor.outstandingBalanceType || vendor.openingBalanceType || 'debit';
                   }
+                } else if (partyType === 'dieselStation') {
+                  const stationRes = await api.get(`/diesel-stations/${actualPartyId}`);
+                  if (stationRes.data.success) {
+                    const station = stationRes.data.data;
+                    partyName = station.name || 'N/A';
+                    balance = station.outstandingBalance || station.openingBalance || 0;
+                    balanceType = station.outstandingBalanceType || station.openingBalanceType || 'debit';
+                  }
                 }
               } catch (err) {
-                console.error(`Error fetching ${partyType} ${partyItem.partyId}:`, err);
+                console.error(`Error fetching ${partyType} ${actualPartyId}:`, err);
               }
 
               return {
-                partyId: partyItem.partyId,
+                partyId: actualPartyId,
                 partyType: partyType,
                 partyName: partyName,
                 amount: partyItem.amount || 0,
@@ -252,7 +277,8 @@ const AddEditVoucher = () => {
             party: '',
             partyName: '',
             parties: partiesData,
-            account: voucher.account?._id || voucher.account || '',
+            parties: partiesData,
+            account: voucher.account?._id || voucher.account?.id || voucher.account || '',
             entries: [],
             narration: voucher.narration || ''
           });
@@ -270,7 +296,7 @@ const AddEditVoucher = () => {
             voucherType: resolvedVoucherType,
             voucherNumber: voucher.voucherNumber || '',
             date: new Date(voucher.date).toISOString().split('T')[0],
-            party: voucher.party?._id || '',
+            party: voucher.party?._id || voucher.party?.id || voucher.party || '',
             partyName: voucher.partyName || '',
             parties: [],
             account: '',
@@ -438,6 +464,14 @@ const AddEditVoucher = () => {
           balance = vendorData.outstandingBalance || vendorData.openingBalance || 0;
           balanceType = vendorData.outstandingBalanceType || vendorData.openingBalanceType || 'debit';
         }
+      } else if (partyType === 'dieselStation') {
+        const stationRes = await api.get(`/diesel-stations/${partyId}`);
+        if (stationRes.data.success) {
+          const stationData = stationRes.data.data;
+          partyName = stationData.name || 'N/A';
+          balance = stationData.outstandingBalance || stationData.openingBalance || 0;
+          balanceType = stationData.outstandingBalanceType || stationData.openingBalanceType || 'debit';
+        }
       }
 
       setFormData(prev => ({
@@ -468,6 +502,9 @@ const AddEditVoucher = () => {
           balance = partyFromList.data.outstandingBalance || partyFromList.data.openingBalance || 0;
           balanceType = partyFromList.data.outstandingBalanceType || partyFromList.data.openingBalanceType || 'debit';
         } else if (partyType === 'vendor') {
+          balance = partyFromList.data.outstandingBalance || partyFromList.data.openingBalance || 0;
+          balanceType = partyFromList.data.outstandingBalanceType || partyFromList.data.openingBalanceType || 'debit';
+        } else if (partyType === 'dieselStation') {
           balance = partyFromList.data.outstandingBalance || partyFromList.data.openingBalance || 0;
           balanceType = partyFromList.data.outstandingBalanceType || partyFromList.data.openingBalanceType || 'debit';
         }
@@ -874,27 +911,42 @@ const AddEditVoucher = () => {
                       <div key={index} className="grid grid-cols-[1fr_200px_40px] gap-4 items-start p-3 bg-gray-50 rounded-lg">
                         <div className="space-y-2">
                           <label className="block text-xs font-medium text-gray-600">Party {index + 1}</label>
-                          <select
-                            value={party.partyId && party.partyType ? `${party.partyType}:${party.partyId}` : ''}
-                            onChange={(e) => handlePartySelect(index, e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                            required
-                          >
-                            <option value="">Select Party</option>
-                            {allParties
+                          <Select
+                            value={
+                              party.partyId && party.partyType
+                                ? {
+                                  value: `${party.partyType}:${party.partyId}`,
+                                  label: allParties.find(p => p.id === party.partyId && p.type === party.partyType)?.name || 'Select Party'
+                                }
+                                : null
+                            }
+                            onChange={(selectedOption) => handlePartySelect(index, selectedOption ? selectedOption.value : '')}
+                            options={allParties
                               .filter(partyItem => {
-                                // Hide Vendors if Voucher Type is Receipt
                                 if (formData.voucherType === 'Receipt' && partyItem.type === 'vendor') {
                                   return false;
                                 }
                                 return true;
                               })
-                              .map(partyItem => (
-                                <option key={`${partyItem.type}:${partyItem.id}`} value={`${partyItem.type}:${partyItem.id}`}>
-                                  {partyItem.name}
-                                </option>
-                              ))}
-                          </select>
+                              .map(partyItem => ({
+                                value: `${partyItem.type}:${partyItem.id}`,
+                                label: partyItem.name
+                              }))}
+                            placeholder="Select Party"
+                            isClearable
+                            className="text-sm react-select-container"
+                            classNamePrefix="react-select"
+                            styles={{
+                              control: (baseStyles) => ({
+                                ...baseStyles,
+                                borderColor: '#D1D5DB',
+                                borderRadius: '0.5rem',
+                                padding: '2px',
+                                boxShadow: 'none',
+                                '&:hover': { borderColor: '#9CA3AF' }
+                              })
+                            }}
+                          />
                           {party.partyId && (
                             <p className="text-xs text-gray-500">
                               curr Bal: {formatAmount(party.currentBalance)} {party.currentBalanceType === 'credit' ? 'Cr' : 'Dr'}
@@ -950,19 +1002,32 @@ const AddEditVoucher = () => {
                 <div className="grid grid-cols-[1fr_200px_40px] gap-4 items-start">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Account:</label>
-                    <select
-                      value={formData.account}
-                      onChange={(e) => handleInputChange('account', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
-                    >
-                      <option value="">Select Account (Cash or Bank)</option>
-                      {cashBankLedgers.map(ledger => (
-                        <option key={ledger.id} value={ledger.id}>
-                          {ledger.name}
-                        </option>
-                      ))}
-                    </select>
+                    <Select
+                      value={
+                        formData.account
+                          ? { value: formData.account, label: cashBankLedgers.find(l => l.id === formData.account)?.name || 'Select Account (Cash or Bank)' }
+                          : null
+                      }
+                      onChange={(selectedOption) => handleInputChange('account', selectedOption ? selectedOption.value : '')}
+                      options={cashBankLedgers.map(ledger => ({
+                        value: ledger.id,
+                        label: ledger.name
+                      }))}
+                      placeholder="Select Account (Cash or Bank)"
+                      isClearable
+                      className="text-sm react-select-container"
+                      classNamePrefix="react-select"
+                      styles={{
+                        control: (baseStyles) => ({
+                          ...baseStyles,
+                          borderColor: '#D1D5DB',
+                          borderRadius: '0.5rem',
+                          padding: '2px',
+                          boxShadow: 'none',
+                          '&:hover': { borderColor: '#9CA3AF' }
+                        })
+                      }}
+                    />
                     {formData.account && (() => {
                       const selectedLedger = cashBankLedgers.find(l => l.id === formData.account);
                       if (selectedLedger) {
@@ -1002,27 +1067,50 @@ const AddEditVoucher = () => {
               <div className="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Party</label>
-                  <select
-                    value={formData.party}
-                    onChange={(e) => handlePartyChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="">Select Party</option>
-                    <optgroup label="Customers">
-                      {customers.map(customer => (
-                        <option key={customer.id} value={customer.id}>
-                          {customer.shopName} - {customer.ownerName}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Vendors">
-                      {vendors.map(vendor => (
-                        <option key={vendor._id} value={vendor._id}>
-                          {vendor.vendorName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  </select>
+                  <Select
+                    value={
+                      formData.party
+                        ? (() => {
+                          const c = customers.find(c => c.id === formData.party);
+                          if (c) return { value: c.id, label: `${c.shopName} - ${c.ownerName}` };
+                          const v = vendors.find(v => v._id === formData.party);
+                          if (v) return { value: v._id, label: v.vendorName };
+                          return { value: formData.party, label: 'Selected Party' };
+                        })()
+                        : null
+                    }
+                    onChange={(option) => handlePartyChange(option ? option.value : '')}
+                    options={[
+                      {
+                        label: 'Customers',
+                        options: customers.map(customer => ({
+                          value: customer.id,
+                          label: `${customer.shopName} - ${customer.ownerName}`
+                        }))
+                      },
+                      {
+                        label: 'Vendors',
+                        options: vendors.map(vendor => ({
+                          value: vendor._id,
+                          label: vendor.vendorName
+                        }))
+                      }
+                    ]}
+                    placeholder="Select Party"
+                    isClearable
+                    className="text-sm react-select-container"
+                    classNamePrefix="react-select"
+                    styles={{
+                      control: (base) => ({
+                        ...base,
+                        borderColor: '#D1D5DB',
+                        borderRadius: '0.5rem',
+                        padding: '2px',
+                        boxShadow: 'none',
+                        '&:hover': { borderColor: '#9CA3AF' }
+                      })
+                    }}
+                  />
                   {partyBalanceLabel && (
                     <p className="text-xs text-gray-500 mt-1">
                       Current Balance: {partyBalanceLabel}
@@ -1089,52 +1177,61 @@ const AddEditVoucher = () => {
                       >
                         {(formData.voucherType === 'Contra' || formData.voucherType === 'Journal') ? (index === 0 ? 'Dr' : 'Cr') : entry.type}
                       </button>
-                      <select
-                        value={entry.account}
-                        onChange={(e) => handleEntryChange(index, 'account', e.target.value)}
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        required
-                      >
-                        <option value="">Select account</option>
-                        {formData.voucherType === 'Journal' ? (
-                          <>
-                            {/* Combined list for Journal */}
-                            <optgroup label="Ledgers">
-                              {ledgers
-                                .filter(ledger => {
-                                  const groupSlug = ledger.group?.slug || '';
-                                  const groupName = ledger.group?.name || '';
-                                  // Filter out "Bank Account" and "Cash-in-Hand" group ledgers
-                                  const isBank = groupSlug === 'bank-accounts' || groupName === 'Bank Accounts';
-                                  const isCash = groupSlug === 'cash-in-hand' || groupName === 'Cash-in-Hand';
-                                  return !isBank && !isCash;
-                                })
-                                .map((ledger) => (
-                                  <option key={`ledger-${ledger.id}`} value={ledger.name}>{ledger.name}</option>
-                                ))}
-                            </optgroup>
-                            <optgroup label="Customers">
-                              {customers.map((customer) => (
-                                <option key={`customer-${customer.id}`} value={customer.shopName || customer.ownerName}>
-                                  {customer.shopName || customer.ownerName}
-                                </option>
-                              ))}
-                            </optgroup>
-                            <optgroup label="Vendors">
-                              {vendors.map((vendor) => (
-                                <option key={`vendor-${vendor._id}`} value={vendor.vendorName}>{vendor.vendorName}</option>
-                              ))}
-                            </optgroup>
-                          </>
-                        ) : (
-                          // Only ledgers for others
-                          ledgers.map((ledger) => (
-                            <option key={ledger.id} value={ledger.name}>
-                              {ledger.name}
-                            </option>
-                          ))
-                        )}
-                      </select>
+                      <Select
+                        value={
+                          entry.account
+                            ? { value: entry.account, label: entry.account }
+                            : null
+                        }
+                        onChange={(option) => handleEntryChange(index, 'account', option ? option.value : '')}
+                        options={formData.voucherType === 'Journal' ? [
+                          {
+                            label: 'Ledgers',
+                            options: ledgers
+                              .filter(ledger => {
+                                const groupSlug = ledger.group?.slug || '';
+                                const groupName = ledger.group?.name || '';
+                                const isBank = groupSlug === 'bank-accounts' || groupName === 'Bank Accounts';
+                                const isCash = groupSlug === 'cash-in-hand' || groupName === 'Cash-in-Hand';
+                                const isBankOD = groupSlug === 'bank-od-a-c' || groupName === 'Bank OD A/c';
+                                return !isBank && !isCash && !isBankOD;
+                              })
+                              .map((ledger) => ({ value: ledger.name, label: ledger.name }))
+                          },
+                          {
+                            label: 'Customers',
+                            options: customers.map((customer) => ({ value: customer.shopName || customer.ownerName, label: customer.shopName || customer.ownerName }))
+                          },
+                          {
+                            label: 'Vendors',
+                            options: vendors.map((vendor) => ({ value: vendor.vendorName, label: vendor.vendorName }))
+                          }
+                        ] : formData.voucherType === 'Contra' ? ledgers
+                          .filter(ledger => {
+                            const groupSlug = ledger.group?.slug || '';
+                            const groupName = ledger.group?.name || '';
+                            const isBank = groupSlug === 'bank-accounts' || groupName === 'Bank Accounts';
+                            const isCash = groupSlug === 'cash-in-hand' || groupName === 'Cash-in-Hand';
+                            const isBankOD = groupSlug === 'bank-od-a-c' || groupName === 'Bank OD A/c';
+                            return isBank || isCash || isBankOD;
+                          })
+                          .map((ledger) => ({ value: ledger.name, label: ledger.name }))
+                          : ledgers.map((ledger) => ({ value: ledger.name, label: ledger.name }))}
+                        placeholder="Select Account"
+                        isClearable
+                        className="flex-1 text-sm react-select-container"
+                        classNamePrefix="react-select"
+                        styles={{
+                          control: (base) => ({
+                            ...base,
+                            borderColor: '#D1D5DB',
+                            borderRadius: '0.5rem',
+                            padding: '2px',
+                            boxShadow: 'none',
+                            '&:hover': { borderColor: '#9CA3AF' }
+                          })
+                        }}
+                      />
                       {/* Hide delete button for Contra or if only 2 entries */}
                       {formData.voucherType !== 'Contra' && formData.voucherType !== 'Journal' && formData.entries.length > 2 && (
                         <button
@@ -1169,13 +1266,7 @@ const AddEditVoucher = () => {
                 </div>
               ))}
 
-              <div className="grid grid-cols-[minmax(0,1fr),220px] items-center py-4">
-                <div className="text-right font-semibold text-gray-900 pr-6">Totals</div>
-                <div className="flex flex-col items-end gap-1 pr-2">
-                  <div className="text-right font-semibold text-red-600 text-sm">₹{totalDebit.toFixed(2)} Dr</div>
-                  <div className="text-right font-semibold text-green-600 text-sm">₹{totalCredit.toFixed(2)} Cr</div>
-                </div>
-              </div>
+
             </div>
 
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">

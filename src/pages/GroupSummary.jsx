@@ -74,17 +74,29 @@ export default function GroupSummary() {
     if (!groupSummary) return;
 
     const isExpandedView = (groupSummary.entries.some(e => e.birds > 0 || e.weight > 0) || groupSummary.group.name.toLowerCase().includes('debtor'));
+    const isDieselView = groupSummary.entries.some(e => e.type === 'dieselStation');
 
     const exportData = groupSummary.entries.map(entry => {
       const row = {
         Particular: entry.name,
       };
 
+      if (isDieselView) {
+        row['Total Volume'] = entry.volume || 0;
+        row['Total Rate/ltr'] = entry.volume ? parseFloat(((entry.transactionCredit || entry.credit || 0) / entry.volume).toFixed(2)) : '-';
+      }
+
       if (isExpandedView) {
-        row['Total Birds'] = entry.birds || 0;
-        row['Total Weight'] = entry.weight ? parseFloat(entry.weight.toFixed(2)) : 0;
-        row['Debit (Sales)'] = entry.transactionDebit || entry.debit || 0;
-        row['Credit (Receipts)'] = entry.transactionCredit || entry.credit || 0;
+        const isFeedGroup = groupSummary.group.name.toLowerCase().includes('feed');
+        if (isFeedGroup) {
+          row['Total Bags'] = entry.birds || 0;
+          row['Total Quantity (Kg)'] = entry.weight ? parseFloat(entry.weight.toFixed(2)) : 0;
+        } else {
+          row['Total Birds'] = entry.birds || 0;
+          row['Total Weight'] = entry.weight ? parseFloat(entry.weight.toFixed(2)) : 0;
+        }
+        row['Debit (Receipts)'] = entry.transactionDebit || entry.debit || 0;
+        row['Credit (Sales)'] = entry.transactionCredit || entry.credit || 0;
 
         const closingBal = entry.closingBalance !== undefined ? entry.closingBalance : (entry.debit - entry.credit);
         row['Closing Balance'] = Math.abs(closingBal).toFixed(2) + (closingBal >= 0 ? ' Dr' : ' Cr');
@@ -103,16 +115,30 @@ export default function GroupSummary() {
       Particular: 'Grand Total',
     };
 
+    if (isDieselView) {
+      const totalVolume = groupSummary.totals.volume || groupSummary.entries.reduce((sum, e) => sum + (e.volume || 0), 0);
+      const totalCredit = groupSummary.entries.reduce((sum, e) => sum + (e.transactionCredit || e.credit || 0), 0); // Need this for rate
+
+      totalRow['Total Volume'] = totalVolume;
+      totalRow['Total Rate/ltr'] = totalVolume ? parseFloat((totalCredit / totalVolume).toFixed(2)) : '-';
+    }
+
     if (isExpandedView) {
-      totalRow['Total Birds'] = groupSummary.totals.birds || 0;
-      totalRow['Total Weight'] = groupSummary.totals.weight ? parseFloat(groupSummary.totals.weight.toFixed(2)) : 0;
+      const isFeedGroup = groupSummary.group.name.toLowerCase().includes('feed');
+      if (isFeedGroup) {
+        totalRow['Total Bags'] = groupSummary.totals.birds || 0;
+        totalRow['Total Quantity (Kg)'] = groupSummary.totals.weight ? parseFloat(groupSummary.totals.weight.toFixed(2)) : 0;
+      } else {
+        totalRow['Total Birds'] = groupSummary.totals.birds || 0;
+        totalRow['Total Weight'] = groupSummary.totals.weight ? parseFloat(groupSummary.totals.weight.toFixed(2)) : 0;
+      }
 
       const totalDebit = groupSummary.entries.reduce((sum, e) => sum + (e.transactionDebit || e.debit || 0), 0);
       const totalCredit = groupSummary.entries.reduce((sum, e) => sum + (e.transactionCredit || e.credit || 0), 0);
       const totalDiscountAndOther = groupSummary.entries.reduce((sum, e) => sum + (e.discountAndOther || 0), 0);
 
-      totalRow['Debit (Sales)'] = totalDebit;
-      totalRow['Credit (Receipts)'] = totalCredit;
+      totalRow['Debit (Receipts)'] = totalDebit;
+      totalRow['Credit (Sales)'] = totalCredit;
 
 
       const netBalance = groupSummary.entries.reduce((sum, e) => sum + (e.closingBalance || (e.debit - e.credit) || 0), 0);
@@ -200,10 +226,13 @@ export default function GroupSummary() {
   }
 
   const isExpandedView = (groupSummary.entries.some(e => e.birds > 0 || e.weight > 0) || groupSummary.group.name.toLowerCase().includes('debtor'));
+  const isDieselView = groupSummary.entries.some(e => e.type === 'dieselStation');
+  const isFeedGroup = groupSummary.group.name.toLowerCase().includes('feed');
 
   const totals = {
     birds: groupSummary.totals.birds || 0,
     weight: groupSummary.totals.weight || 0,
+    volume: groupSummary.totals.volume || 0,
     debitExpanded: groupSummary.entries.reduce((sum, e) => sum + (e.transactionDebit || e.debit || 0), 0),
     creditExpanded: groupSummary.entries.reduce((sum, e) => sum + (e.transactionCredit || e.credit || 0), 0),
     discountAndOther: groupSummary.entries.reduce((sum, e) => sum + (e.discountAndOther || 0), 0),
@@ -249,7 +278,7 @@ export default function GroupSummary() {
     if (!dateString) return '';
     return new Date(dateString).toLocaleDateString('en-GB', {
       day: '2-digit',
-      month: 'short',
+      month: '2-digit',
       year: 'numeric'
     });
   };
@@ -332,12 +361,18 @@ export default function GroupSummary() {
             <thead>
               <tr className="border-b-2 border-gray-300">
                 <th className="text-left py-3 px-4 font-semibold text-gray-900">Particular</th>
+                {isDieselView && (
+                  <>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-900">Total Volume</th>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-900">Total Rate/ltr</th>
+                  </>
+                )}
                 {isExpandedView && (
                   <>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-900">Total Birds</th>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-900">Total Weight</th>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-900">Debit (Sales)</th>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-900">Credit (Receipts)</th>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-900">{isFeedGroup ? 'Total Bags' : 'Total Birds'}</th>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-900">{isFeedGroup ? 'Total Quantity (Kg)' : 'Total Weight'}</th>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-900">Debit (Receipts)</th>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-900">Credit (Sales)</th>
                     <th className="text-right py-3 px-4 font-semibold text-gray-900">Closing Balance</th>
                   </>
                 )}
@@ -358,22 +393,32 @@ export default function GroupSummary() {
                     return (
                       <tr
                         key={entry.id}
-                        className={`border-b border-gray-200 hover:bg-gray-50 ${entry.type === 'subgroup' || entry.type === 'customer' || entry.type === 'vendor' || entry.type === 'ledger' ? 'cursor-pointer' : ''
+                        className={`border-b border-gray-200 hover:bg-gray-50 ${entry.type === 'subgroup' || entry.type === 'customer' || entry.type === 'vendor' || entry.type === 'ledger' || entry.type === 'dieselStation' ? 'cursor-pointer' : ''
                           }`}
                         onClick={() => {
                           const query = `?startDate=${dateFilter.startDate}&endDate=${dateFilter.endDate}`;
+                          const encodedGroupName = encodeURIComponent(groupSummary.group.name);
                           if (entry.type === 'subgroup') {
-                            navigate(`/group-summary/${entry.id}${query}`);
+                            if (entry.name && entry.name.toLowerCase() === 'birds stock') {
+                              navigate(`/birds-stock/monthly-summary${query}`);
+                            } else if (entry.name && entry.name.toLowerCase() === 'feed stock') {
+                              navigate(`/feed-stock/monthly-summary${query}`);
+                            } else {
+                              navigate(`/group-summary/${entry.id}${query}`);
+                            }
                           } else if (entry.type === 'customer') {
-                            navigate(`/monthly-summary/customer/${entry.id}${query}`);
+                            navigate(`/monthly-summary/customer/${entry.id}${query}&groupName=${encodedGroupName}`);
                           } else if (entry.type === 'vendor') {
                             let qs = query;
                             if (groupSummary.group.name.trim().toLowerCase() === 'purchase account' || groupSummary.group.name.trim().toLowerCase() === 'purchase accounts') {
                               qs += '&filterType=PURCHASE';
                             }
+                            qs += `&groupName=${encodedGroupName}`;
                             navigate(`/monthly-summary/vendor/${entry.id}${qs}`);
                           } else if (entry.type === 'ledger') {
-                            navigate(`/monthly-summary/ledger/${entry.id}${query}`);
+                            navigate(`/monthly-summary/ledger/${entry.id}${query}&groupName=${encodedGroupName}`);
+                          } else if (entry.type === 'dieselStation') {
+                            navigate(`/monthly-summary/dieselStation/${entry.id}`);
                           }
                         }}
                       >
@@ -397,10 +442,26 @@ export default function GroupSummary() {
                             <span className="text-blue-600 hover:text-blue-800 hover:underline font-medium">
                               {entry.name}
                             </span>
+                          ) : entry.type === 'dieselStation' ? (
+                            <span className="text-blue-600 hover:text-blue-800 hover:underline font-medium">
+                              {entry.name}
+                              <span className="ml-2 text-xs text-gray-500">(Diesel Station)</span>
+                            </span>
                           ) : (
                             entry.name
                           )}
                         </td>
+
+                        {isDieselView && (
+                          <>
+                            <td className="py-3 px-4 text-right text-gray-700">
+                              {renderCellWithPercentage(entry.volume, totals.volume, 'weight')}
+                            </td>
+                            <td className="py-3 px-4 text-right text-gray-700">
+                              {entry.volume ? ((entry.transactionCredit || entry.credit || 0) / entry.volume).toFixed(2) : '-'}
+                            </td>
+                          </>
+                        )}
 
                         {isExpandedView ? (
                           <>
@@ -462,6 +523,16 @@ export default function GroupSummary() {
                   {(isExpandedView) ? (
                     <tr className="border-t-2 border-gray-400 bg-gray-50">
                       <td className="py-3 px-4 font-bold text-gray-900">Grand Total</td>
+                      {isDieselView && (
+                        <>
+                          <td className="py-3 px-4 text-right font-bold text-gray-900">
+                            {renderCellWithPercentage(totals.volume, totals.volume, 'weight')}
+                          </td>
+                          <td className="py-3 px-4 text-right font-bold text-gray-900">
+                            {totals.volume ? (totals.creditExpanded / totals.volume).toFixed(2) : '-'}
+                          </td>
+                        </>
+                      )}
                       <td className="py-3 px-4 text-right font-bold text-gray-900">
                         {renderCellWithPercentage(totals.birds, totals.birds)}
                       </td>
@@ -481,6 +552,16 @@ export default function GroupSummary() {
                   ) : (
                     <tr className="border-t-2 border-gray-400 bg-gray-50">
                       <td className="py-3 px-4 font-bold text-gray-900">Grand Total</td>
+                      {isDieselView && (
+                        <>
+                          <td className="py-3 px-4 text-right font-bold text-gray-900">
+                            {renderCellWithPercentage(totals.volume, totals.volume, 'weight')}
+                          </td>
+                          <td className="py-3 px-4 text-right font-bold text-gray-900">
+                            {totals.volume ? (totals.creditExpanded / totals.volume).toFixed(2) : '-'}
+                          </td>
+                        </>
+                      )}
                       <td className="py-3 px-4 text-right font-bold text-gray-900">
                         {/* Use Expanded totals (sums of transactions) */}
                         {renderCellWithPercentage(totals.debitExpanded, totals.debitExpanded, 'currency')}

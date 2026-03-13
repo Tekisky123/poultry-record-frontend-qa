@@ -293,63 +293,102 @@ export default function IndirectSaleDetail() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-        <div className="flex items-start justify-between px-6 py-5 border-b border-gray-200">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">Particulars</h2>
-            <p className="text-sm text-gray-500">Overview of indirect purchase &amp; sales engagement</p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+          <div className="flex items-start justify-between px-6 py-5 border-b border-gray-200">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">Particulars</h2>
+              <p className="text-sm text-gray-500">Overview of indirect purchase &amp; sales engagement</p>
+            </div>
+            <button
+              onClick={handleDetailEdit}
+              className="px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-flex items-center gap-2"
+            >
+              <Edit size={16} />
+              Edit
+            </button>
           </div>
-          <button
-            onClick={handleDetailEdit}
-            className="px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-flex items-center gap-2"
-          >
-            <Edit size={16} />
-            Edit
-          </button>
+          <div className="px-6 py-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Date</p>
+              <p className="text-sm font-medium text-gray-900 mt-1">
+                {dayjs(record.date).format('DD MMM YYYY')}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Invoice No</p>
+              <p className="text-sm font-medium text-gray-900 mt-1">
+                {record.invoiceNumber || '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Customer</p>
+              <p className="text-sm font-medium text-gray-900 mt-1">
+                {record.customer?.shopName || 'N/A'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Vendor</p>
+              <p className="text-sm font-medium text-gray-900 mt-1">
+                {record.vendor?.vendorName || 'N/A'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Place</p>
+              <p className="text-sm font-medium text-gray-900 mt-1">
+                {record.place || 'N/A'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Vehicle Number</p>
+              <p className="text-sm font-medium text-gray-900 mt-1">
+                {record.vehicleNumber || 'N/A'}
+              </p>
+            </div>
+            <div className="col-span-1 md:col-span-2">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Driver</p>
+              <p className="text-sm font-medium text-gray-900 mt-1">
+                {record.driver || 'N/A'}
+              </p>
+            </div>
+          </div>
         </div>
-        <div className="px-6 py-5 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Date</p>
-            <p className="text-sm font-medium text-gray-900 mt-1">
-              {dayjs(record.date).format('DD MMM YYYY')}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Invoice No</p>
-            <p className="text-sm font-medium text-gray-900 mt-1">
-              {record.invoiceNumber || '—'}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Customer</p>
-            <p className="text-sm font-medium text-gray-900 mt-1">
-              {record.customer?.shopName || 'N/A'}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Vendor</p>
-            <p className="text-sm font-medium text-gray-900 mt-1">
-              {record.vendor?.vendorName || 'N/A'}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Place</p>
-            <p className="text-sm font-medium text-gray-900 mt-1">
-              {record.place || 'N/A'}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Vehicle Number</p>
-            <p className="text-sm font-medium text-gray-900 mt-1">
-              {record.vehicleNumber || 'N/A'}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Driver</p>
-            <p className="text-sm font-medium text-gray-900 mt-1">
-              {record.driver || 'N/A'}
-            </p>
-          </div>
+
+        <div className="flex justify-center items-center h-full bg-white rounded-xl shadow-sm border border-gray-200 p-6 overflow-x-auto">
+          <table className="w-full max-w-sm border-collapse border border-black bg-white">
+            <thead>
+              <tr>
+                <th colSpan="2" className="border border-black px-3 py-1 text-center text-xl font-bold text-black uppercase">
+                  FINANCIAL SUMMARY
+                </th>
+              </tr>
+            </thead>
+            <tbody className="text-lg text-black font-medium">
+              <tr>
+                <td className="border border-black px-3 py-1 uppercase">SALES AMOUNT</td>
+                <td className="border border-black px-3 py-1">{Number(record.summary?.salesAmount || 0)}</td>
+              </tr>
+              <tr>
+                <td className="border border-black px-3 py-1 uppercase">PURCHASE AMOUNT</td>
+                <td className="border border-black px-3 py-1">{Number(record.summary?.purchaseAmount || 0)}</td>
+              </tr>
+              <tr className="bg-yellow-300">
+                <td className="border border-black px-3 py-1 uppercase">MORTALITY/W L</td>
+                <td className="border border-black px-3 py-1 relative">
+                  <span className="absolute top-0 left-0 w-0 h-0 border-t-[8px] border-t-green-600 border-r-[8px] border-r-transparent"></span>
+                  {Number(record.summary?.mortalityAmount || 0)}
+                </td>
+              </tr>
+              <tr>
+                <td className="border border-black px-3 py-1 uppercase">NETT PROFIT</td>
+                <td className="border border-black px-3 py-1">{Number(record.summary?.grossProfit || 0)}</td>
+              </tr>
+              <tr>
+                <td className="border border-black px-3 py-1 uppercase">MARGINE</td>
+                <td className="border border-black px-3 py-1">{Number(record.summary?.margin || 0)}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -519,52 +558,7 @@ export default function IndirectSaleDetail() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900">Financial Summary</h3>
-          <p className="text-sm text-gray-500">Automatically calculated profitability snapshot</p>
-        </div>
-        <div className="px-6 py-6">
-          <div className="grid grid-cols-1 gap-4">
-            <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex justify-between items-center">
-              <p className="text-sm text-gray-500 uppercase tracking-wide font-medium">Sales Amount</p>
-              <p className="text-xl font-bold text-gray-900">
-                ₹{formatCurrency(record.summary?.salesAmount || 0)}
-              </p>
-            </div>
-            <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex justify-between items-center">
-              <p className="text-sm text-gray-500 uppercase tracking-wide font-medium">Purchase Amount</p>
-              <p className="text-xl font-bold text-gray-900">
-                ₹{formatCurrency(record.summary?.purchaseAmount || 0)}
-              </p>
-            </div>
-            <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex justify-between items-center">
-              <p className="text-sm text-gray-500 uppercase tracking-wide font-medium">Gross Profit</p>
-              <p className="text-xl font-bold text-gray-900">
-                ₹{formatCurrency(record.summary?.grossProfit || 0)}
-              </p>
-            </div>
-            <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex justify-between items-center">
-              <p className="text-sm text-gray-500 uppercase tracking-wide font-medium">Mortality / Wastage Loss</p>
-              <p className="text-xl font-bold text-gray-900">
-                ₹{formatCurrency(record.summary?.mortalityAmount || 0)}
-              </p>
-            </div>
-            <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex justify-between items-center">
-              <p className="text-sm text-gray-500 uppercase tracking-wide font-medium">Net Profit</p>
-              <p className="text-xl font-bold text-gray-900">
-                ₹{formatCurrency(record.summary?.netProfit || 0)}
-              </p>
-            </div>
-            <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex justify-between items-center">
-              <p className="text-sm text-gray-500 uppercase tracking-wide font-medium">Margin (₹/Kg)</p>
-              <p className="text-xl font-bold text-gray-900">
-                ₹{formatCurrency(record.summary?.margin || 0)}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
+
 
       {/* Detail Edit Modal */}
       {isDetailModalOpen && (
