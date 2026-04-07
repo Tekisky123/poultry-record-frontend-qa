@@ -1,0 +1,525 @@
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Loader2, Download, TrendingUp, ArrowLeft, Calendar, X } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import api from '../lib/axios';
+
+const formatDateDisplay = (dateString) => {
+    if (!dateString) return '-';
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '-';
+    return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+export default function LivePoultrySales() {
+    const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+
+    // We'll store normalized sale records here
+    const [saleRecords, setSaleRecords] = useState([]);
+
+    const [dateFilter, setDateFilter] = useState({
+        startDate: searchParams.get('startDate') || '',
+        endDate: searchParams.get('endDate') || ''
+    });
+
+    // Date Filter Modal States
+    const [showDateFilterModal, setShowDateFilterModal] = useState(false);
+    const [tempDateFilter, setTempDateFilter] = useState({
+        startDate: '',
+        endDate: ''
+    });
+
+    const isDateFilterActive = !!(dateFilter.startDate || dateFilter.endDate);
+
+    const getEffectiveDates = () => {
+        let start = dateFilter.startDate;
+        let end = dateFilter.endDate;
+        const d = new Date();
+        const year = d.getFullYear();
+        if (start && !end) {
+            end = `${year}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        } else if (!start && end) {
+            start = `${year}-01-01`;
+        }
+        return { start, end };
+    };
+
+    const { start: effectiveStart, end: effectiveEnd } = getEffectiveDates();
+
+    const openDateFilterModal = () => {
+        setTempDateFilter(dateFilter);
+        setShowDateFilterModal(true);
+    };
+
+    const handleApplyDateFilter = () => {
+        setDateFilter(tempDateFilter);
+        setShowDateFilterModal(false);
+        const params = new URLSearchParams(searchParams);
+        if (tempDateFilter.startDate) params.set('startDate', tempDateFilter.startDate);
+        else params.delete('startDate');
+        if (tempDateFilter.endDate) params.set('endDate', tempDateFilter.endDate);
+        else params.delete('endDate');
+        navigate(`/live-poultry-sales/monthly-summary?${params.toString()}`);
+    };
+
+    const handleClearDateFilter = () => {
+        setDateFilter({ startDate: '', endDate: '' });
+        const params = new URLSearchParams(searchParams);
+        params.delete('startDate');
+        params.delete('endDate');
+        navigate(`/live-poultry-sales/monthly-summary?${params.toString()}`);
+    };
+
+    // For infinite scroll
+    const [visibleCount, setVisibleCount] = useState(50);
+
+    useEffect(() => {
+        setVisibleCount(50);
+        fetchData();
+    }, [dateFilter.startDate, dateFilter.endDate]);
+
+    // Handle scroll for infinite loading
+    useEffect(() => {
+        const handleScroll = () => {
+            if (window.innerHeight + window.scrollY >= document.documentElement.offsetHeight - 500) {
+                setVisibleCount(prev => prev + 50);
+            }
+        };
+        window.addEventListener('scroll', handleScroll);
+        return () => window.removeEventListener('scroll', handleScroll);
+    }, []);
+
+    const fetchData = async () => {
+        setLoading(true);
+        setError('');
+        try {
+            let startOfPeriod, endOfPeriod;
+            if (dateFilter.startDate && dateFilter.endDate) {
+                startOfPeriod = dateFilter.startDate;
+                endOfPeriod = dateFilter.endDate;
+            } else if (dateFilter.startDate) {
+                startOfPeriod = dateFilter.startDate;
+                const d = new Date();
+                endOfPeriod = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            } else if (dateFilter.endDate) {
+                startOfPeriod = `${new Date().getFullYear()}-01-01`;
+                endOfPeriod = dateFilter.endDate;
+            } else {
+                const year = new Date().getFullYear();
+                startOfPeriod = `${year}-01-01`;
+                endOfPeriod = `${year}-12-31`;
+            }
+
+            let combinedRecords = [];
+
+            // 1. Fetch Inventory Stocks (type = 'sale')
+            const invRes = await api.get('/inventory-stock', {
+                params: {
+                    startDate: startOfPeriod,
+                    endDate: endOfPeriod,
+                    type: 'sale'
+                }
+            });
+
+            if (invRes.data.success && invRes.data.data) {
+                invRes.data.data.forEach(stock => {
+                    // It's a sale, so vendorId is irrelevant, we look for customerId
+                    const customerName = stock.customerId?.shopName || stock.customerId?.ownerName || stock.customerId?.name || 'N/A';
+
+                    let typeLabel = 'OTHER SALES';
+                    if (stock.inventoryType === 'bird') {
+                        typeLabel = 'STOCK POINT SALES';
+                    } else if (stock.inventoryType === 'feed') {
+                        typeLabel = 'FEED STOCK SALE';
+                    }
+
+                    const weight = Number(stock.weight) || 0;
+                    const birds = Number(stock.birds) || 0;
+                    const amount = Number(stock.amount) || 0;
+                    const rate = Number(stock.rate) || (weight > 0 ? amount / weight : 0);
+
+                    combinedRecords.push({
+                        id: stock._id,
+                        date: new Date(stock.date),
+                        particular: customerName,
+                        type: typeLabel,
+                        birds: birds,
+                        quantity: weight,
+                        rate: rate,
+                        amount: amount
+                    });
+                });
+            }
+
+            // 2. Fetch Trip Sales
+            let tripPage = 1;
+            let tripTotalPages = 1;
+            do {
+                const tripsRes = await api.get('/trip', {
+                    params: {
+                        startDate: startOfPeriod,
+                        endDate: endOfPeriod,
+                        page: tripPage,
+                        limit: 50
+                    }
+                });
+                if (tripsRes.data.success) {
+                    const trips = tripsRes.data.trips || (tripsRes.data.data && tripsRes.data.data.trips) || [];
+                    trips.forEach(trip => {
+                        if (trip.sales && Array.isArray(trip.sales)) {
+                            trip.sales.forEach(sale => {
+                                const customerName = sale.client?.shopName || sale.client?.ownerName || sale.client?.name || 'N/A';
+                                const weight = Number(sale.weight) || 0;
+                                const birds = Number(sale.birds) || 0;
+                                const amount = Number(sale.amount) || 0;
+                                const rate = Number(sale.rate) || 0;
+
+                                // Note: We use the embedded timestamp if available, fallback to trip date
+                                const saleDate = sale.timestamp ? new Date(sale.timestamp) : new Date(trip.date);
+
+                                const saleDateStr = saleDate.toISOString().split('T')[0];
+
+                                if (saleDateStr >= startOfPeriod && saleDateStr <= endOfPeriod) {
+                                    combinedRecords.push({
+                                        id: sale._id || `${trip.id || trip._id}-${Math.random()}`,
+                                        tripId: trip.id || trip._id,
+                                        date: saleDate,
+                                        particular: customerName,
+                                        type: 'DIRECT SALES (Trip Sales)',
+                                        birds: birds,
+                                        quantity: weight,
+                                        rate: rate,
+                                        amount: amount
+                                    });
+                                }
+                            });
+                        }
+                    });
+                    tripTotalPages = tripsRes.data.pagination?.pages || tripsRes.data.data?.pagination?.pages || 1;
+                } else {
+                    break;
+                }
+                tripPage++;
+            } while (tripPage <= tripTotalPages && tripPage <= 20);
+
+            // 3. Fetch Indirect Sales (contains indirect sales)
+            let indPage = 1;
+            let indTotalPages = 1;
+            do {
+                const indRes = await api.get('/indirect-sales', {
+                    params: {
+                        startDate: startOfPeriod,
+                        endDate: endOfPeriod,
+                        page: indPage,
+                        limit: 50
+                    }
+                });
+
+                if (indRes.data.success && indRes.data.data) {
+                    const records = indRes.data.data.records || [];
+                    records.forEach(indSale => {
+                        const customerName = indSale.customer?.shopName || indSale.customer?.ownerName || 'N/A';
+
+                        // IndirectSale has a single `.sales` object
+                        if (indSale.sales) {
+                            const weight = Number(indSale.sales.weight) || 0;
+                            const birds = Number(indSale.sales.birds) || 0;
+                            const amount = Number(indSale.sales.amount) || 0;
+                            const rate = Number(indSale.sales.rate) || 0;
+
+                            if (weight > 0 || amount > 0) {
+                                combinedRecords.push({
+                                    id: indSale._id,
+                                    indirectId: indSale._id,
+                                    date: new Date(indSale.date),
+                                    particular: customerName,
+                                    type: 'INDIRECT SALES',
+                                    birds: birds,
+                                    quantity: weight,
+                                    rate: rate,
+                                    amount: amount
+                                });
+                            }
+                        }
+                    });
+                    indTotalPages = indRes.data.data.pagination?.totalPages || 1;
+                } else {
+                    break;
+                }
+                indPage++;
+            } while (indPage <= indTotalPages && indPage <= 20);
+
+            // Sort chronologically
+            combinedRecords.sort((a, b) => a.date - b.date);
+
+            setSaleRecords(combinedRecords);
+        } catch (err) {
+            console.error('Error fetching sales data:', err);
+            setError(err.response?.data?.message || 'Failed to fetch sales data');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleExportToExcel = () => {
+        if (!saleRecords.length) return;
+
+        const exportData = saleRecords.map(record => ({
+            'Date': record.date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-'),
+            'Particular': record.particular,
+            'Type': record.type,
+            'No. Of Birds': record.birds,
+            'Quantity (kg)': record.quantity,
+            'Rate': record.rate.toFixed(2),
+            'Amount': record.amount
+        }));
+
+        const totalBirds = saleRecords.reduce((sum, r) => sum + (r.birds || 0), 0);
+        const totalQty = saleRecords.reduce((sum, r) => sum + r.quantity, 0);
+        const totalAmount = saleRecords.reduce((sum, r) => sum + r.amount, 0);
+
+        exportData.push({
+            'Date': 'Total',
+            'Particular': '',
+            'Type': '',
+            'No. Of Birds': totalBirds,
+            'Quantity (kg)': totalQty,
+            'Rate': '',
+            'Amount': totalAmount
+        });
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Monthly Sales");
+
+        const fileName = (dateFilter.startDate || dateFilter.endDate)
+            ? `Live_Poultry_Sales_${dateFilter.startDate || 'start'}_to_${dateFilter.endDate || 'end'}.xlsx`
+            : `Live_Poultry_Sales_Year_${new Date().getFullYear()}.xlsx`;
+        XLSX.writeFile(wb, fileName);
+    };
+
+    if (loading && !saleRecords.length) return <div className="flex justify-center p-12"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /></div>;
+
+    const totalBirds = saleRecords.reduce((sum, r) => sum + (r.birds || 0), 0);
+    const totalQty = saleRecords.reduce((sum, r) => sum + r.quantity, 0);
+    const totalAmount = saleRecords.reduce((sum, r) => sum + r.amount, 0);
+
+    const visibleRecords = saleRecords.slice(0, visibleCount);
+
+    const handleRowClick = (record) => {
+        if (record.type === 'DIRECT SALES (Trip Sales)' && record.tripId) {
+            navigate(`/trips/${record.tripId}`);
+        } else if (record.type === 'STOCK POINT SALES' || record.type === 'FEED STOCK SALE') {
+            const y = record.date.getFullYear();
+            const m = String(record.date.getMonth() + 1).padStart(2, '0');
+            const d = String(record.date.getDate()).padStart(2, '0');
+            navigate(`/stocks/manage?date=${y}-${m}-${d}`);
+        } else if (record.type === 'INDIRECT SALES' && record.indirectId) {
+            navigate(`/indirect-sales/${record.indirectId}`);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => navigate(-1)}
+                            className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 bg-white shadow-sm"
+                        >
+                            <ArrowLeft size={20} />
+                        </button>
+                        <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
+                            <TrendingUp className="w-8 h-8 text-indigo-600" />
+                            Live Poultry Birds Sales
+                        </h1>
+                    </div>
+                    <p className="text-gray-600 mt-1">{isDateFilterActive ? 'Summary for Selected Period' : 'Yearly Summary of All Sales'}</p>
+                </div>
+
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-3 border-t md:border-none border-gray-200">
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={openDateFilterModal}
+                            className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors bg-white shadow-sm"
+                            title="Filter by Date Range"
+                        >
+                            <Calendar size={18} className="text-gray-500" />
+                            <span className="font-medium">
+                                {isDateFilterActive
+                                    ? `${formatDateDisplay(effectiveStart)} - ${formatDateDisplay(effectiveEnd)}`
+                                    : 'Filter by Date'}
+                            </span>
+                        </button>
+
+                        {isDateFilterActive && (
+                            <button
+                                onClick={handleClearDateFilter}
+                                className="flex items-center gap-1 px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors text-sm font-medium"
+                            >
+                                <X size={16} />
+                                Clear
+                            </button>
+                        )}
+                    </div>
+                    <button
+                        onClick={handleExportToExcel}
+                        className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-sm transition-colors"
+                    >
+                        <Download size={20} />
+                        <span className="font-medium">Export</span>
+                    </button>
+                </div>
+            </div>
+
+            {error && (
+                <div className="p-4 bg-red-50 text-red-600 rounded-lg shadow-sm border border-red-200">
+                    <p>{error}</p>
+                    <button onClick={fetchData} className="mt-2 text-sm font-medium underline">Retry</button>
+                </div>
+            )}
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+                <table className="w-full text-sm text-center">
+                    <thead className="bg-gray-100 text-gray-700 uppercase font-semibold border-b-2 border-gray-300">
+                        <tr>
+                            <th className="py-3 px-4 text-left border-r border-gray-300">Date</th>
+                            <th className="py-3 px-4 text-left border-r border-gray-300">Particular</th>
+                            <th className="py-3 px-4 border-r border-gray-300">Type</th>
+                            <th className="py-3 px-4 border-r border-gray-300 text-right">No. Of Birds</th>
+                            <th className="py-3 px-4 border-r border-gray-300 text-right">Quantity (kg)</th>
+                            <th className="py-3 px-4 border-r border-gray-300 text-right">Rate</th>
+                            <th className="py-3 px-4 text-right">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                        {visibleRecords.length > 0 ? (
+                            visibleRecords.map((record, idx) => (
+                                <tr
+                                    key={record.id || idx}
+                                    onClick={() => handleRowClick(record)}
+                                    className="hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    <td className="py-3 px-4 border-r text-left text-gray-900 whitespace-nowrap">
+                                        {record.date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-')}
+                                    </td>
+                                    <td className="py-3 px-4 border-r text-left font-medium text-gray-900">
+                                        {record.particular}
+                                    </td>
+                                    <td className="py-3 px-4 border-r font-medium text-center">
+                                        <span className={`px-2 py-1 rounded-md border uppercase text-xs whitespace-nowrap ${record.type.toLowerCase().includes('indirect')
+                                                ? 'bg-purple-50 border-purple-200 text-purple-700'
+                                                : record.type.toLowerCase().includes('direct')
+                                                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                                                    : record.type.toLowerCase().includes('stock point')
+                                                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                                        : 'bg-gray-50 border-gray-200 text-gray-700'
+                                            }`}>
+                                            {record.type}
+                                        </span>
+                                    </td>
+                                    <td className="py-3 px-4 text-right border-r text-gray-900 font-medium">
+                                        {record.birds ? record.birds.toLocaleString('en-IN') : 0}
+                                    </td>
+                                    <td className="py-3 px-4 text-right border-r text-gray-900 font-medium">
+                                        {record.quantity.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="py-3 px-4 text-right border-r text-gray-600">
+                                        {record.rate.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="py-3 px-4 text-right text-gray-900 font-bold">
+                                        {record.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                    </td>
+                                </tr>
+                            ))
+                        ) : (
+                            <tr>
+                                <td colSpan="7" className="py-8 text-center text-gray-500 italic">
+                                    No sales records found for {isDateFilterActive ? 'the selected date period' : `the current year`}
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                    {saleRecords.length > 0 && (
+                        <tfoot className="bg-gray-100 font-bold text-gray-900 border-t-2 border-gray-400">
+                            <tr>
+                                <td colSpan="3" className="py-3 px-4 border-r uppercase text-sm text-right">Totals</td>
+                                <td className="py-3 px-4 text-right border-r">{totalBirds.toLocaleString('en-IN')}</td>
+                                <td className="py-3 px-4 text-right border-r">{totalQty.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                                <td className="py-3 px-4 text-right border-r">
+                                    {totalQty > 0 ? (totalAmount / totalQty).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                                </td>
+                                <td className="py-3 px-4 text-right text-indigo-700">
+                                    {totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </td>
+                            </tr>
+                        </tfoot>
+                    )}
+                </table>
+            </div>
+
+            {/* Date Filter Modal */}
+            {showDateFilterModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-xl">
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                                <Calendar size={24} className="text-indigo-600" />
+                                Select Date Range
+                            </h2>
+                            <button
+                                onClick={() => setShowDateFilterModal(false)}
+                                className="text-gray-400 hover:text-gray-600 transition-colors"
+                            >
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                                <input
+                                    type="date"
+                                    value={tempDateFilter.startDate}
+                                    onChange={(e) => setTempDateFilter(prev => ({ ...prev, startDate: e.target.value }))}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                                <input
+                                    type="date"
+                                    value={tempDateFilter.endDate}
+                                    onChange={(e) => setTempDateFilter(prev => ({ ...prev, endDate: e.target.value }))}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                />
+                            </div>
+
+                            <div className="flex justify-end gap-3 mt-6">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowDateFilterModal(false)}
+                                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleApplyDateFilter}
+                                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors border border-transparent"
+                                >
+                                    Apply Filter
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}

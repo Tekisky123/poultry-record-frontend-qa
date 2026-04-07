@@ -1,0 +1,389 @@
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Loader2, Download, Package, Calendar, ArrowLeft, X } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import api from '../lib/axios';
+
+const formatDateDisplay = (dateString) => {
+    if (!dateString) return '-';
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '-';
+    return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+export default function FeedStockPurchase() {
+    const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    
+    // We'll store normalized purchase records here
+    const [purchaseRecords, setPurchaseRecords] = useState([]);
+
+    const [dateFilter, setDateFilter] = useState({
+        startDate: searchParams.get('startDate') || '',
+        endDate: searchParams.get('endDate') || ''
+    });
+    
+    // Date Filter Modal States
+    const [showDateFilterModal, setShowDateFilterModal] = useState(false);
+    const [tempDateFilter, setTempDateFilter] = useState({
+        startDate: '',
+        endDate: ''
+    });
+
+    const isDateFilterActive = !!(dateFilter.startDate || dateFilter.endDate);
+
+    const getEffectiveDates = () => {
+        let start = dateFilter.startDate;
+        let end = dateFilter.endDate;
+        const d = new Date();
+        const year = d.getFullYear();
+        if (start && !end) {
+            end = `${year}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        } else if (!start && end) {
+            start = `${year}-01-01`;
+        }
+        return { start, end };
+    };
+    
+    const { start: effectiveStart, end: effectiveEnd } = getEffectiveDates();
+
+    const openDateFilterModal = () => {
+        setTempDateFilter(dateFilter);
+        setShowDateFilterModal(true);
+    };
+
+    const handleApplyDateFilter = () => {
+        setDateFilter(tempDateFilter);
+        setShowDateFilterModal(false);
+        const params = new URLSearchParams(searchParams);
+        if (tempDateFilter.startDate) params.set('startDate', tempDateFilter.startDate);
+        else params.delete('startDate');
+        if (tempDateFilter.endDate) params.set('endDate', tempDateFilter.endDate);
+        else params.delete('endDate');
+        navigate(`/feed-stock-purchase/monthly-summary?${params.toString()}`);
+    };
+
+    const handleClearDateFilter = () => {
+        setDateFilter({ startDate: '', endDate: '' });
+        const params = new URLSearchParams(searchParams);
+        params.delete('startDate');
+        params.delete('endDate');
+        navigate(`/feed-stock-purchase/monthly-summary?${params.toString()}`);
+    };
+
+    useEffect(() => {
+        fetchData();
+    }, [dateFilter.startDate, dateFilter.endDate]);
+
+    const fetchData = async () => {
+        setLoading(true);
+        setError('');
+        try {
+            let startOfPeriod, endOfPeriod;
+            if (dateFilter.startDate && dateFilter.endDate) {
+                startOfPeriod = dateFilter.startDate;
+                endOfPeriod = dateFilter.endDate;
+            } else if (dateFilter.startDate) {
+                startOfPeriod = dateFilter.startDate;
+                const d = new Date();
+                endOfPeriod = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            } else if (dateFilter.endDate) {
+                startOfPeriod = `${new Date().getFullYear()}-01-01`;
+                endOfPeriod = dateFilter.endDate;
+            } else {
+                const year = new Date().getFullYear();
+                startOfPeriod = `${year}-01-01`;
+                endOfPeriod = `${year}-12-31`;
+            }
+
+            // 1. Fetch Inventory
+            const invRes = await api.get('/inventory-stock', {
+                params: {
+                    startDate: startOfPeriod,
+                    endDate: endOfPeriod,
+                    type: 'purchase'
+                }
+            });
+
+            // Process and normalize records
+            let combinedRecords = [];
+
+            // A. Process Inventory & Trip Stocks
+            if (invRes.data.success && invRes.data.data) {
+                invRes.data.data.forEach(stock => {
+                    if (stock.inventoryType !== 'feed') return;
+
+                    const vendorName = stock.vendorId?.vendorName || stock.vendorId?.companyName || stock.vendorId?.name || 'N/A';
+                    
+                    let typeLabel = 'feed stock purchase';
+
+                    const weight = Number(stock.feedQty) || Number(stock.weight) || 0;
+                    const bags = Number(stock.bags) || 0;
+                    const amount = Number(stock.amount) || 0;
+                    const rate = Number(stock.rate) || (weight > 0 ? amount / weight : 0);
+
+                    combinedRecords.push({
+                        id: stock._id,
+                        date: new Date(stock.date),
+                        particular: vendorName,
+                        type: typeLabel,
+                        bags: bags,
+                        quantity: weight,
+                        rate: rate,
+                        amount: amount
+                    });
+                });
+            }
+
+            // Sort chronologically
+            combinedRecords.sort((a, b) => a.date - b.date);
+
+            setPurchaseRecords(combinedRecords);
+        } catch (err) {
+            console.error('Error fetching purchases data:', err);
+            setError(err.response?.data?.message || 'Failed to fetch purchases data');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleExportToExcel = () => {
+        if (!purchaseRecords.length) return;
+
+        const exportData = purchaseRecords.map(record => ({
+            'Date': record.date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-'),
+            'Particular': record.particular,
+            'No. Of Bags': record.bags,
+            'Quantity (kg)': record.quantity,
+            'Rate': record.rate.toFixed(2),
+            'Amount': record.amount
+        }));
+
+        const totalBags = purchaseRecords.reduce((sum, r) => sum + (r.bags || 0), 0);
+        const totalQty = purchaseRecords.reduce((sum, r) => sum + r.quantity, 0);
+        const totalAmount = purchaseRecords.reduce((sum, r) => sum + r.amount, 0);
+
+        exportData.push({
+            'Date': 'Total',
+            'Particular': '',
+            'No. Of Bags': totalBags,
+            'Quantity (kg)': totalQty,
+            'Rate': '',
+            'Amount': totalAmount
+        });
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Monthly Purchases");
+        
+        const fileName = (dateFilter.startDate || dateFilter.endDate)
+            ? `Feed_Stock_Purchases_${dateFilter.startDate || 'start'}_to_${dateFilter.endDate || 'end'}.xlsx`
+            : `Feed_Stock_Purchases_Year_${new Date().getFullYear()}.xlsx`;
+        XLSX.writeFile(wb, fileName);
+    };
+
+    if (loading && !purchaseRecords.length) return <div className="flex justify-center p-12"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /></div>;
+
+    const totalBags = purchaseRecords.reduce((sum, r) => sum + (r.bags || 0), 0);
+    const totalQty = purchaseRecords.reduce((sum, r) => sum + r.quantity, 0);
+    const totalAmount = purchaseRecords.reduce((sum, r) => sum + r.amount, 0);
+
+    const handleRowClick = (record) => {
+        if (record.type === 'feed stock purchase' || record.type === 'FEED STOCK PURCHASE') {
+            const y = record.date.getFullYear();
+            const m = String(record.date.getMonth() + 1).padStart(2, '0');
+            const d = String(record.date.getDate()).padStart(2, '0');
+            navigate(`/stocks/manage?date=${y}-${m}-${d}`);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => navigate(-1)}
+                            className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 bg-white shadow-sm"
+                        >
+                            <ArrowLeft size={20} />
+                        </button>
+                        <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
+                            <Package className="w-8 h-8 text-indigo-600" />
+                            Feed Stock Purchase
+                        </h1>
+                    </div>
+                    <p className="text-gray-600 mt-1">{isDateFilterActive ? 'Summary for Selected Period' : 'Yearly Summary of All Feed Purchases'}</p>
+                </div>
+                
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-3 border-t md:border-none border-gray-200">
+                    <div className="flex items-center gap-3">
+                        <button
+                          onClick={openDateFilterModal}
+                          className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors bg-white shadow-sm"
+                          title="Filter by Date Range"
+                        >
+                          <Calendar size={18} className="text-gray-500" />
+                          <span className="font-medium">
+                            {isDateFilterActive
+                              ? `${formatDateDisplay(effectiveStart)} - ${formatDateDisplay(effectiveEnd)}`
+                              : 'Filter by Date'}
+                          </span>
+                        </button>
+
+                        {isDateFilterActive && (
+                          <button
+                            onClick={handleClearDateFilter}
+                            className="flex items-center gap-1 px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors text-sm font-medium"
+                          >
+                            <X size={16} />
+                            Clear
+                          </button>
+                        )}
+                    </div>
+                    <button
+                        onClick={handleExportToExcel}
+                        className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-sm transition-colors"
+                    >
+                        <Download size={20} />
+                        <span className="font-medium">Export</span>
+                    </button>
+                </div>
+            </div>
+
+            {error && (
+                <div className="p-4 bg-red-50 text-red-600 rounded-lg shadow-sm border border-red-200">
+                    <p>{error}</p>
+                    <button onClick={fetchData} className="mt-2 text-sm font-medium underline">Retry</button>
+                </div>
+            )}
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+                <table className="w-full text-sm text-center">
+                    <thead className="bg-gray-100 text-gray-700 uppercase font-semibold border-b-2 border-gray-300">
+                        <tr>
+                            <th className="py-3 px-4 text-left border-r border-gray-300">Date</th>
+                            <th className="py-3 px-4 text-left border-r border-gray-300">Particular</th>
+                            <th className="py-3 px-4 border-r border-gray-300 text-right">No. Of Bags</th>
+                            <th className="py-3 px-4 border-r border-gray-300 text-right">Quantity (kg)</th>
+                            <th className="py-3 px-4 border-r border-gray-300 text-right">Rate</th>
+                            <th className="py-3 px-4 text-right">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                        {purchaseRecords.length > 0 ? (
+                            purchaseRecords.map((record, idx) => (
+                                <tr 
+                                    key={record.id || idx} 
+                                    onClick={() => handleRowClick(record)}
+                                    className="hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    <td className="py-3 px-4 border-r text-left text-gray-900 whitespace-nowrap">
+                                        {record.date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-')}
+                                    </td>
+                                    <td className="py-3 px-4 border-r text-left font-medium text-gray-900">
+                                        {record.particular}
+                                    </td>
+                                    <td className="py-3 px-4 text-right border-r text-gray-900 font-medium">
+                                        {record.bags ? record.bags.toLocaleString('en-IN') : 0}
+                                    </td>
+                                    <td className="py-3 px-4 text-right border-r text-gray-900 font-medium">
+                                        {record.quantity.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="py-3 px-4 text-right border-r text-gray-600">
+                                        {record.rate.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="py-3 px-4 text-right text-gray-900 font-bold">
+                                        {record.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                    </td>
+                                </tr>
+                            ))
+                        ) : (
+                            <tr>
+                                <td colSpan="6" className="py-8 text-center text-gray-500 italic">
+                                    No purchase records found for {isDateFilterActive ? 'the selected date period' : `the current year`}
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                    {purchaseRecords.length > 0 && (
+                        <tfoot className="bg-gray-100 font-bold text-gray-900 border-t-2 border-gray-400">
+                            <tr>
+                                <td colSpan="2" className="py-3 px-4 border-r uppercase text-sm text-right">Totals</td>
+                                <td className="py-3 px-4 text-right border-r">{totalBags.toLocaleString('en-IN')}</td>
+                                <td className="py-3 px-4 text-right border-r">{totalQty.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                                <td className="py-3 px-4 text-right border-r">
+                                    {totalQty > 0 ? (totalAmount / totalQty).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                                </td>
+                                <td className="py-3 px-4 text-right text-indigo-700">
+                                    {totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </td>
+                            </tr>
+                        </tfoot>
+                    )}
+                </table>
+            </div>
+
+            {/* Date Filter Modal */}
+            {showDateFilterModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-xl">
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                                <Calendar size={24} className="text-indigo-600" />
+                                Select Date Range
+                            </h2>
+                            <button
+                                onClick={() => setShowDateFilterModal(false)}
+                                className="text-gray-400 hover:text-gray-600 transition-colors"
+                            >
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                                <input
+                                    type="date"
+                                    value={tempDateFilter.startDate}
+                                    onChange={(e) => setTempDateFilter(prev => ({ ...prev, startDate: e.target.value }))}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                                <input
+                                    type="date"
+                                    value={tempDateFilter.endDate}
+                                    onChange={(e) => setTempDateFilter(prev => ({ ...prev, endDate: e.target.value }))}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                />
+                            </div>
+
+                            <div className="flex justify-end gap-3 mt-6">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowDateFilterModal(false)}
+                                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleApplyDateFilter}
+                                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors border border-transparent"
+                                >
+                                    Apply Filter
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
